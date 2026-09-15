@@ -1,0 +1,17 @@
+{
+  "name": "ChopMboa — Gérez. Vendez. Livrez.",
+  "short_name": "ChopMboa",
+  "description": "Le système d'exploitation des restaurants camerounais : POS, menu QR, commandes et Mobile Money en FCFA.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0B0B0C",
+  "theme_color": "#FF6B00",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
