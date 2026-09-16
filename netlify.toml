@@ -1,7 +1,20 @@
 [build]
   command = "npm run build"
   publish = "dist"
+  functions = "netlify/functions"
 
 [build.environment]
   NODE_VERSION = "20"
   NPM_FLAGS = "--legacy-peer-deps"
+
+# Route toutes les requêtes /api/* vers la Netlify Function
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+
+# SPA fallback — React Router gère le routing côté client
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

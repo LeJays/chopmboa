@@ -11,14 +11,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: "include",
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
-  let body;
+
+  // Lire le body une seule fois en tant que texte, puis tenter le parsing JSON
+  const text = await response.text();
+  let body: any;
   try {
-    body = await response.json();
-  } catch (err) {
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-    throw err;
+    body = JSON.parse(text);
+  } catch {
+    // La réponse n'est pas du JSON
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${text}`);
+    throw new Error(`Réponse inattendue du serveur: ${text}`);
   }
-  if (!response.ok) throw new Error(body.error || "La requête a échoué.");
+
+  if (!response.ok) throw new Error(body?.error || "La requête a échoué.");
   return body;
 }
 

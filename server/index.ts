@@ -94,9 +94,15 @@ async function comparePassword(password: string, stored: string): Promise<boolea
 
 function issueSession(userId: string, c: Parameters<typeof setCookie>[0]) {
   const token = signToken({ sub: userId, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7 });
+  // SameSite=Lax works for same-domain deployments (Netlify frontend + function on same origin)
+  // SameSite=None;Secure is only needed for cross-origin cookie sharing
+  const isProduction = process.env.NODE_ENV === "production";
+  const cookieFlags = isProduction
+    ? `HttpOnly; SameSite=Lax; Secure`
+    : `HttpOnly; SameSite=Lax`;
   c.header(
     "Set-Cookie",
-    `chopmboa_session=${token}; Max-Age=${60 * 60 * 24 * 7}; Path=/; HttpOnly; SameSite=None; Secure`,
+    `chopmboa_session=${token}; Max-Age=${60 * 60 * 24 * 7}; Path=/; ${cookieFlags}`,
     { append: true }
   );
 }
@@ -165,13 +171,13 @@ app.get("/api/auth/me", async (c) => {
 app.post("/api/auth/signout", (c) => {
   c.header(
     "Set-Cookie",
-    "chopmboa_session=; Max-Age=0; Path=/; HttpOnly; SameSite=None; Secure; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+    "chopmboa_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
     { append: true }
   );
   deleteCookie(c, "chopmboa_session", {
     path: "/",
     secure: true,
-    sameSite: "None",
+    sameSite: "Lax",
   });
   return c.json({ ok: true });
 });
@@ -1588,9 +1594,16 @@ app.post("/api/actions/:actionRef", async (c) => {
   return c.json({});
 });
 
-app.use("/*", serveStatic({ root: "./dist" }));
-app.get("*", serveStatic({ path: "./dist/index.html" }));
+// Export the Hono app for use in Netlify Functions and dev server
+export { app };
 
-serve({ fetch: app.fetch, port: 3000, hostname: '0.0.0.0' }, (info) => {
-  console.log(`Neon API running on http://localhost:${info.port}`);
-});
+// Only start the Node.js server when running directly (not imported as a module)
+// This block is skipped when the file is imported by the Netlify function handler
+if (process.env.NODE_ENV !== "netlify") {
+  app.use("/*", serveStatic({ root: "./dist" }));
+  app.get("*", serveStatic({ path: "./dist/index.html" }));
+
+  serve({ fetch: app.fetch, port: 3000, hostname: "0.0.0.0" }, (info) => {
+    console.log(`Neon API running on http://localhost:${info.port}`);
+  });
+}
