@@ -115,8 +115,16 @@ export default function TableMenu() {
   const fetchTrackingUpdate = async () => {
     if (!placed?.id) return;
     try {
-      const updated = (await getOrder({ orderId: placed.id })) as any;
-      const mapped = mapOrder(updated);
+      const updated = (await getOrder({ orderId: placed.id })) as {
+        id: string;
+        status: string;
+        order_number: string;
+        total_fcfa: number;
+        waiter_name: string | null;
+        waiter_avatar: string | null;
+        [key: string]: unknown;
+      };
+      const mapped = mapOrder(updated as any);
       setPlaced((prev) => {
         if (!prev) return null;
         if (prev.status !== mapped.status) {
@@ -125,8 +133,9 @@ export default function TableMenu() {
         return {
           ...prev,
           status: mapped.status,
-          waiterName: (updated as any).waiter_name ?? prev.waiterName,
-          waiterAvatar: (updated as any).waiter_avatar ?? prev.waiterAvatar,
+          // Utiliser !== undefined pour distinguer null (pas de waiter) de non-défini
+          waiterName: updated.waiter_name !== undefined ? updated.waiter_name : prev.waiterName,
+          waiterAvatar: updated.waiter_avatar !== undefined ? updated.waiter_avatar : prev.waiterAvatar,
         };
       });
     } catch (err) {

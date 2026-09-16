@@ -1134,12 +1134,24 @@ export function WaiterView({
   const [pendingId, setPendingId] = useState<string | null>(null);
   const prevReadyIds = useRef<Set<string>>(new Set());
 
+  // Patches optimistes sur les commandes (appliqués immédiatement sans attendre le poll)
+  const [localPatches, setLocalPatches] = useState<Record<string, Partial<ActiveOrder & { waiter_id: string | null; waiter_name: string | null; waiter_avatar: string | null }>>>({});
+
   // userId courant du serveur (pour savoir si la commande lui appartient)
   const myUserId = context.userId;
 
-  const orders = (ordersPoll.data ?? []).filter(
-    (o) => !["served", "delivered", "cancelled"].includes(o.status),
-  );
+  // Fusionner les données du poll avec les patches locaux
+  const rawOrders = ordersPoll.data ?? [];
+  const orders = rawOrders
+    .map((o) => ({ ...o, ...(localPatches[o.id] ?? {}) }))
+    .filter((o) => !["served", "delivered", "cancelled"].includes(o.status));
+
+  // Quand le poll revient, supprimer les patches (le vrai data prime)
+  useEffect(() => {
+    if (rawOrders.length > 0) {
+      setLocalPatches({});
+    }
+  }, [rawOrders]);
 
   // Alerte sonore + toast quand une commande passe à "ready" et m'appartient
   useEffect(() => {
@@ -1154,7 +1166,7 @@ export function WaiterView({
           const gain = ctx.createGain();
           osc.connect(gain);
           gain.connect(ctx.destination);
-          osc.frequency.value = 1047; // Do5 — son distinct de la cuisine
+          osc.frequency.value = 1047;
           gain.gain.setValueAtTime(0.2, ctx.currentTime);
           gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
           osc.start();
@@ -1171,11 +1183,35 @@ export function WaiterView({
 
   const claim = async (o: ActiveOrder) => {
     setPendingId(o.id);
+    // Patch optimiste immédiat : afficher "Ma commande" sans attendre le poll
+    setLocalPatches((prev) => ({
+      ...prev,
+      [o.id]: {
+        waiter_id: myUserId,
+        waiter_name: context.fullName,
+        waiter_avatar: null,
+      } as any,
+    }));
     try {
-      await claimOrder({ orderId: o.id });
+      const res = await claimOrder({ orderId: o.id }) as any;
+      // Mettre à jour le patch avec les vraies données retournées par le serveur
+      setLocalPatches((prev) => ({
+        ...prev,
+        [o.id]: {
+          waiter_id: res.waiter_id ?? myUserId,
+          waiter_name: res.waiter_name ?? context.fullName,
+          waiter_avatar: res.waiter_avatar ?? null,
+        } as any,
+      }));
       toast.success(`${o.order_number} — prise en charge !`);
       ordersPoll.refresh();
     } catch (err) {
+      // Annuler le patch optimiste en cas d'erreur
+      setLocalPatches((prev) => {
+        const next = { ...prev };
+        delete next[o.id];
+        return next;
+      });
       toast.error(err instanceof Error ? err.message : "Action impossible.");
     } finally {
       setPendingId(null);
@@ -1184,10 +1220,20 @@ export function WaiterView({
 
   const unclaim = async (o: ActiveOrder) => {
     setPendingId(o.id);
+    // Patch optimiste immédiat
+    setLocalPatches((prev) => ({
+      ...prev,
+      [o.id]: { waiter_id: null, waiter_name: null, waiter_avatar: null } as any,
+    }));
     try {
       await unclaimOrder({ orderId: o.id });
       ordersPoll.refresh();
     } catch (err) {
+      setLocalPatches((prev) => {
+        const next = { ...prev };
+        delete next[o.id];
+        return next;
+      });
       toast.error(err instanceof Error ? err.message : "Action impossible.");
     } finally {
       setPendingId(null);

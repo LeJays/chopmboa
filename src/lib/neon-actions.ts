@@ -16,14 +16,16 @@ export function useAction<TArgs extends Record<string, unknown>, TResult>(action
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(args ?? {}),
     });
-    let body;
+    // Lire le body une seule fois pour éviter le double-read du stream
+    const text = await response.text();
+    let body: any;
     try {
-      body = await response.json();
-    } catch (err) {
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-      throw err;
+      body = JSON.parse(text);
+    } catch {
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${text}`);
+      throw new Error(`Réponse inattendue: ${text}`);
     }
-    if (!response.ok) throw new Error(body.error || "La requête a échoué.");
+    if (!response.ok) throw new Error(body?.error || "La requête a échoué.");
     return body;
   }, [actionRef]);
 }

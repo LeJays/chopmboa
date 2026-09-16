@@ -3,10 +3,17 @@
  *
  * Enregistre le Service Worker, demande la permission Notification,
  * souscrit au Web Push via VAPID et envoie l'abonnement au backend.
+ *
+ * NOTE: Web Push ne fonctionne qu'en HTTPS. Sur localhost, le SW
+ * s'enregistre correctement mais pushManager.subscribe() échoue.
+ * On détecte ce cas et on désactive silencieusement le push en dev.
  */
 
 /** Clé publique VAPID injectée au build par Vite */
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
+
+/** Web Push nécessite HTTPS (sauf localhost pour les tests SW uniquement) */
+const IS_HTTPS = typeof window !== "undefined" && window.location.protocol === "https:";
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -23,7 +30,10 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
   if (!("serviceWorker" in navigator)) return null;
   try {
     const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
-    console.log("[ChopMboa SW] Enregistré :", reg.scope);
+    // Ne loguer que si vraiment utile
+    if (IS_HTTPS) {
+      console.log("[ChopMboa SW] Enregistré :", reg.scope);
+    }
     return reg;
   } catch (err) {
     console.warn("[ChopMboa SW] Échec d'enregistrement :", err);
@@ -44,12 +54,30 @@ export async function requestNotificationPermission(): Promise<boolean> {
 }
 
 /**
+ * Retourne true si le push est disponible sur cet environnement.
+ * Nécessite HTTPS + VAPID configuré + navigateur supporté.
+ */
+export function isPushAvailable(): boolean {
+  return (
+    IS_HTTPS &&
+    !!VAPID_PUBLIC_KEY &&
+    "serviceWorker" in navigator &&
+    "PushManager" in window &&
+    "Notification" in window
+  );
+}
+
+/**
  * Souscrit au Web Push et envoie l'abonnement au backend.
  * @param restaurantId — L'identifiant du restaurant pour filtrer les notifs
  */
 export async function subscribeToPush(restaurantId?: string): Promise<boolean> {
-  if (!VAPID_PUBLIC_KEY) {
-    console.warn("[ChopMboa Push] VITE_VAPID_PUBLIC_KEY non défini — push désactivé.");
+  if (!isPushAvailable()) {
+    if (!IS_HTTPS) {
+      console.info("[ChopMboa Push] Notifications push disponibles uniquement en HTTPS (production).");
+    } else if (!VAPID_PUBLIC_KEY) {
+      console.warn("[ChopMboa Push] VITE_VAPID_PUBLIC_KEY non défini — push désactivé.");
+    }
     return false;
   }
 
@@ -66,7 +94,7 @@ export async function subscribeToPush(restaurantId?: string): Promise<boolean> {
     if (!subscription) {
       subscription = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY!),
       });
     }
 
@@ -113,8 +141,9 @@ export async function unsubscribeFromPush(): Promise<void> {
 
 /**
  * Retourne l'état actuel de la permission Notification.
+ * Retourne "unsupported" si non disponible ou si on est en HTTP.
  */
 export function getNotificationPermission(): NotificationPermission | "unsupported" {
-  if (!("Notification" in window)) return "unsupported";
+  if (!isPushAvailable()) return "unsupported";
   return Notification.permission;
 }
