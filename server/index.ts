@@ -6,9 +6,22 @@ import { setCookie, getCookie, deleteCookie } from "hono/cookie";
 import { Pool } from "pg";
 import { createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
+import webPush from "web-push";
 
 const scrypt = promisify(scryptCallback);
 const app = new Hono();
+
+// Configure web-push VAPID keys (loaded from env at startup)
+const vapidPublicKey = process.env.VAPID_PUBLIC_KEY?.replace(/^"|"$/g, "");
+const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY?.replace(/^"|"$/g, "");
+const vapidEmail = process.env.VAPID_EMAIL?.replace(/^"|"$/g, "") ?? "mailto:admin@chopmboa.cm";
+
+if (vapidPublicKey && vapidPrivateKey) {
+  webPush.setVapidDetails(vapidEmail, vapidPublicKey, vapidPrivateKey);
+  console.log("Web Push VAPID configured.");
+} else {
+  console.warn("VAPID keys not set — push notifications disabled.");
+}
 
 app.onError((err, c) => {
   console.error("Unhandled Hono Error:", err);
@@ -44,6 +57,24 @@ async function ensureSchema() {
     await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS om_name TEXT`);
     await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS cash_active BOOLEAN DEFAULT true`);
     await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS payment_instructions TEXT`);
+    // Waiter assignment on orders
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS waiter_id UUID REFERENCES users(id)`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS waiter_name TEXT`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS waiter_avatar TEXT`);
+    // Avatar for staff / users
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT`);
+    // Push notification subscriptions
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id),
+        restaurant_id UUID REFERENCES restaurants(id),
+        endpoint TEXT NOT NULL UNIQUE,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
     console.log("Database schema columns checked/added successfully.");
   } catch (err) {
     console.error("Schema initialization warning:", err);
@@ -105,6 +136,88 @@ function issueSession(userId: string, c: Parameters<typeof setCookie>[0]) {
     `chopmboa_session=${token}; Max-Age=${60 * 60 * 24 * 7}; Path=/; ${cookieFlags}`,
     { append: true }
   );
+}
+
+/* ====================================================================== */
+/* Push notification helper — fire-and-forget, ne bloque pas la réponse  */
+/* ====================================================================== */
+
+const STATUS_PUSH_CONFIG: Record<string, { title: string; body: (name: string) => string; url: string }> = {
+  ready: {
+    title: "🍽️ Commande prête !",
+    body: (name) => `${name} est prête à être servie.`,
+    url: "/waiter",
+  },
+  in_kitchen: {
+    title: "👨‍🍳 En préparation",
+    body: (name) => `${name} est en cours de préparation.`,
+    url: "/kitchen",
+  },
+  served: {
+    title: "✅ Commande servie",
+    body: (name) => `${name} a été servie avec succès.`,
+    url: "/waiter",
+  },
+  delivered: {
+    title: "🛵 Livraison effectuée",
+    body: (name) => `${name} a été livrée.`,
+    url: "/deliveries",
+  },
+};
+
+async function sendOrderStatusPush(
+  orderId: string,
+  status: string,
+  restaurantId: string,
+  waiterId: string | null,
+  customerName: string | null,
+): Promise<void> {
+  const config = STATUS_PUSH_CONFIG[status];
+  if (!config) return;
+
+  const label = customerName ? `CMD de ${customerName}` : `Commande`;
+
+  try {
+    // Récupérer les abonnés push pour ce restaurant
+    const subsRes = await pool.query(
+      `SELECT endpoint, p256dh, auth, user_id FROM push_subscriptions WHERE restaurant_id = $1`,
+      [restaurantId]
+    );
+
+    // Pour "ready" : notifier surtout le waiter assigné en priorité, puis tous
+    const targetSubs = status === "ready" && waiterId
+      ? subsRes.rows.filter((s: { user_id: string }) => s.user_id === waiterId)
+      : subsRes.rows;
+
+    // Si "ready" et pas d'abonnés waiter trouvés, notifier tous
+    const finalSubs = targetSubs.length > 0 ? targetSubs : subsRes.rows;
+
+    const payload = JSON.stringify({
+      title: config.title,
+      body: config.body(label),
+      url: config.url,
+      tag: `order-${orderId}-${status}`,
+      data: { orderId, status },
+    });
+
+    await Promise.allSettled(
+      finalSubs.map((sub: { endpoint: string; p256dh: string; auth: string }) =>
+        webPush
+          .sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            payload,
+          )
+          .catch(async (err: any) => {
+            // Supprimer les abonnements expirés (410 Gone)
+            if (err?.statusCode === 410 || err?.statusCode === 404) {
+              await pool.query(`DELETE FROM push_subscriptions WHERE endpoint = $1`, [sub.endpoint]);
+            }
+          })
+      )
+    );
+  } catch (err) {
+    console.warn("Push notification error:", err);
+  }
 }
 
 app.use("/api/*", cors({ origin: (origin) => origin || "*", credentials: true }));
@@ -661,21 +774,23 @@ app.post("/api/actions/:actionRef", async (c) => {
     const body = await c.req.json<{ restaurantId?: string }>();
     if (!body.restaurantId) return c.json([]);
     const result = await pool.query(
-      `SELECT 
+      `SELECT
          'owner-' || r.owner_id as id,
          'owner' as role,
          u.full_name,
          u.email,
+         u.avatar_url,
          true as is_owner
        FROM restaurants r
        JOIN users u ON r.owner_id = u.id
        WHERE r.id = $1::uuid
        UNION ALL
-       SELECT 
+       SELECT
          rs.id::text as id,
          rs.role::text as role,
          u.full_name,
          u.email,
+         u.avatar_url,
          false as is_owner
        FROM restaurant_staff rs
        JOIN users u ON rs.user_id = u.id
@@ -1009,19 +1124,23 @@ app.post("/api/actions/:actionRef", async (c) => {
     if (!body.restaurantId) return c.json([]);
     const limit = body.limit || 50;
     const result = await pool.query(
-      `SELECT 
-        o.id, 
+      `SELECT
+        o.id,
         'CMD-' || UPPER(SUBSTRING(o.id::text, 1, 4)) AS order_number,
-        o.order_type, 
-        o.status, 
-        o.subtotal_fcfa, 
-        o.total_fcfa, 
-        o.payment_method, 
-        o.payment_status, 
-        o.customer_name, 
+        o.order_type,
+        o.status,
+        o.subtotal_fcfa,
+        o.total_fcfa,
+        o.payment_method,
+        o.payment_status,
+        o.customer_name,
         o.delivery_address,
         o.created_at,
         o.table_id,
+        o.waiter_id,
+        o.waiter_name,
+        o.waiter_avatar,
+        rt.table_number,
         COALESCE(
           json_agg(
             json_build_object(
@@ -1038,19 +1157,24 @@ app.post("/api/actions/:actionRef", async (c) => {
        FROM orders o
        LEFT JOIN order_items oi ON o.id = oi.order_id
        LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
+       LEFT JOIN restaurant_tables rt ON o.table_id = rt.id
        WHERE o.restaurant_id = $1::uuid
-       GROUP BY 
-        o.id, 
-        o.order_type, 
-        o.status, 
-        o.subtotal_fcfa, 
-        o.total_fcfa, 
-        o.payment_method, 
-        o.payment_status, 
-        o.customer_name, 
+       GROUP BY
+        o.id,
+        o.order_type,
+        o.status,
+        o.subtotal_fcfa,
+        o.total_fcfa,
+        o.payment_method,
+        o.payment_status,
+        o.customer_name,
         o.delivery_address,
         o.created_at,
-        o.table_id
+        o.table_id,
+        o.waiter_id,
+        o.waiter_name,
+        o.waiter_avatar,
+        rt.table_number
        ORDER BY o.created_at DESC
        LIMIT $2`,
       [body.restaurantId, limit]
@@ -1164,10 +1288,18 @@ app.post("/api/actions/:actionRef", async (c) => {
     const body = await c.req.json<{ orderId?: string; status?: string }>();
     if (!body.orderId || !body.status) return c.json({ error: "Paramètres manquants" }, 400);
     const result = await pool.query(
-      `UPDATE orders SET status = $1::order_status, updated_at = NOW() WHERE id = $2::uuid RETURNING id, status`,
+      `UPDATE orders SET status = $1::order_status, updated_at = NOW() WHERE id = $2::uuid RETURNING id, status, restaurant_id, waiter_id, customer_name, order_number`,
       [body.status, body.orderId]
     );
-    return c.json(result.rows[0]);
+    const order = result.rows[0];
+    if (!order) return c.json({ error: "Commande introuvable" }, 404);
+
+    // Envoyer des notifications push si VAPID configuré
+    if (vapidPublicKey && vapidPrivateKey) {
+      void sendOrderStatusPush(order.id, order.status, order.restaurant_id, order.waiter_id, order.customer_name);
+    }
+
+    return c.json({ id: order.id, status: order.status });
   }
 
   if (actionRef === "orders.markPaid") {
@@ -1199,10 +1331,12 @@ app.post("/api/actions/:actionRef", async (c) => {
     const body = await c.req.json<{ orderId?: string }>();
     if (!body.orderId) return c.json({ error: "ID requis" }, 400);
     const result = await pool.query(
-      `SELECT id, order_type, status, subtotal_fcfa, total_fcfa, payment_method, payment_status, customer_name, created_at,
-              'CMD-' || UPPER(SUBSTRING(id::text, 1, 4)) AS order_number
-       FROM orders
-       WHERE id = $1::uuid`,
+      `SELECT o.id, o.order_type, o.status, o.subtotal_fcfa, o.total_fcfa,
+              o.payment_method, o.payment_status, o.customer_name, o.created_at,
+              o.waiter_id, o.waiter_name, o.waiter_avatar,
+              'CMD-' || UPPER(SUBSTRING(o.id::text, 1, 4)) AS order_number
+       FROM orders o
+       WHERE o.id = $1::uuid`,
       [body.orderId]
     );
     if (result.rows.length === 0) {
@@ -1446,6 +1580,7 @@ app.post("/api/actions/:actionRef", async (c) => {
       email?: string;
       password?: string;
       role?: string;
+      avatarUrl?: string | null;
     }>();
 
     if (!body.restaurantId || !body.fullName?.trim() || !body.email?.trim()) {
@@ -1455,6 +1590,7 @@ app.post("/api/actions/:actionRef", async (c) => {
     const cleanEmail = body.email.trim().toLowerCase();
     const cleanName = body.fullName.trim();
     const cleanRole = body.role || "waiter";
+    const cleanAvatar = body.avatarUrl?.trim() || null;
 
     let userId: string;
     let accountCreated = false;
@@ -1467,14 +1603,21 @@ app.post("/api/actions/:actionRef", async (c) => {
     if (existingUser.rows.length > 0) {
       userId = existingUser.rows[0].id;
       accountCreated = false;
+      // Update avatar if provided
+      if (cleanAvatar !== undefined) {
+        await pool.query(
+          `UPDATE users SET avatar_url = $1 WHERE id = $2::uuid`,
+          [cleanAvatar, userId]
+        );
+      }
     } else {
       const passwordToHash = body.password?.trim() || "ChopMboa2026!";
       const passwordHash = await hashPassword(passwordToHash);
       const newUser = await pool.query(
-        `INSERT INTO users (full_name, email, password_hash, global_role)
-         VALUES ($1, $2, $3, 'customer'::global_role)
+        `INSERT INTO users (full_name, email, password_hash, global_role, avatar_url)
+         VALUES ($1, $2, $3, 'customer'::global_role, $4)
          RETURNING id`,
-        [cleanName, cleanEmail, passwordHash]
+        [cleanName, cleanEmail, passwordHash, cleanAvatar]
       );
       userId = newUser.rows[0].id;
       accountCreated = true;
@@ -1563,6 +1706,90 @@ app.post("/api/actions/:actionRef", async (c) => {
           [body.restaurantId, payload.sub, JSON.stringify({ staffId: body.staffId })]
         );
       }
+    }
+    return c.json({ ok: true });
+  }
+
+  /* ====================== WAITER CLAIM / UNCLAIM ====================== */
+
+  if (actionRef === "orders.claimOrder") {
+    const payload = verifyToken(getCookie(c, "chopmboa_session"));
+    if (!payload) return c.json({ error: "Non autorisé" }, 401);
+    const body = await c.req.json<{ orderId?: string }>();
+    if (!body.orderId) return c.json({ error: "orderId requis" }, 400);
+
+    // Fetch waiter name + avatar from users
+    const userRes = await pool.query(
+      `SELECT full_name, avatar_url FROM users WHERE id = $1::uuid`,
+      [payload.sub]
+    );
+    const user = userRes.rows[0];
+    if (!user) return c.json({ error: "Utilisateur introuvable" }, 404);
+
+    const result = await pool.query(
+      `UPDATE orders
+       SET waiter_id = $1::uuid, waiter_name = $2, waiter_avatar = $3, updated_at = NOW()
+       WHERE id = $4::uuid AND waiter_id IS NULL
+       RETURNING id, waiter_id, waiter_name, waiter_avatar`,
+      [payload.sub, user.full_name, user.avatar_url || null, body.orderId]
+    );
+
+    if (result.rows.length === 0) {
+      // Already claimed by someone else
+      const current = await pool.query(
+        `SELECT waiter_name FROM orders WHERE id = $1::uuid`,
+        [body.orderId]
+      );
+      return c.json(
+        { error: `Déjà prise en charge par ${current.rows[0]?.waiter_name || "un serveur"}` },
+        409
+      );
+    }
+    return c.json(result.rows[0]);
+  }
+
+  if (actionRef === "orders.unclaimOrder") {
+    const payload = verifyToken(getCookie(c, "chopmboa_session"));
+    if (!payload) return c.json({ error: "Non autorisé" }, 401);
+    const body = await c.req.json<{ orderId?: string }>();
+    if (!body.orderId) return c.json({ error: "orderId requis" }, 400);
+
+    await pool.query(
+      `UPDATE orders
+       SET waiter_id = NULL, waiter_name = NULL, waiter_avatar = NULL, updated_at = NOW()
+       WHERE id = $1::uuid AND waiter_id = $2::uuid`,
+      [body.orderId, payload.sub]
+    );
+    return c.json({ ok: true });
+  }
+
+  /* ==================== PUSH NOTIFICATION SUBSCRIPTION ==================== */
+
+  if (actionRef === "push.subscribe") {
+    const payload = verifyToken(getCookie(c, "chopmboa_session"));
+    if (!payload) return c.json({ error: "Non autorisé" }, 401);
+    const body = await c.req.json<{
+      endpoint?: string;
+      p256dh?: string;
+      auth?: string;
+      restaurantId?: string;
+    }>();
+    if (!body.endpoint || !body.p256dh || !body.auth) {
+      return c.json({ error: "Subscription incomplète" }, 400);
+    }
+    await pool.query(
+      `INSERT INTO push_subscriptions (user_id, restaurant_id, endpoint, p256dh, auth)
+       VALUES ($1::uuid, $2, $3, $4, $5)
+       ON CONFLICT (endpoint) DO UPDATE SET user_id = $1::uuid, restaurant_id = $2, p256dh = $4, auth = $5`,
+      [payload.sub, body.restaurantId || null, body.endpoint, body.p256dh, body.auth]
+    );
+    return c.json({ ok: true });
+  }
+
+  if (actionRef === "push.unsubscribe") {
+    const body = await c.req.json<{ endpoint?: string }>();
+    if (body.endpoint) {
+      await pool.query(`DELETE FROM push_subscriptions WHERE endpoint = $1`, [body.endpoint]);
     }
     return c.json({ ok: true });
   }

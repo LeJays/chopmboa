@@ -4,9 +4,11 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
 import type { StaffContext } from "@/hooks/use-staff-context";
 import { STAFF_ROLE_LABELS } from "@/lib/chopmboa";
-import { LogOut } from "lucide-react";
-import type { ReactNode } from "react";
+import { getNotificationPermission, subscribeToPush } from "@/lib/push-notifications";
+import { Bell, BellOff, LogOut } from "lucide-react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
+import { toast } from "sonner";
 
 /* ====================================================================== */
 /* ChopMboa — shell des espaces par rôle (cuisine, caisse, salle,         */
@@ -28,6 +30,25 @@ export function RoleShell({
 }) {
   const { signOut } = useAuth();
   const navigate = useNavigate();
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission | "unsupported">("default");
+
+  useEffect(() => {
+    setNotifPermission(getNotificationPermission());
+  }, []);
+
+  const handleEnableNotifications = async () => {
+    const ok = await subscribeToPush(context.primaryRestaurantId ?? undefined);
+    if (ok) {
+      setNotifPermission("granted");
+      toast.success("Notifications activées — vous serez alerté même en arrière-plan !");
+    } else {
+      const perm = getNotificationPermission();
+      setNotifPermission(perm);
+      if (perm === "denied") {
+        toast.error("Notifications bloquées. Autorisez-les dans les paramètres de votre navigateur.");
+      }
+    }
+  };
 
   const roleBadge =
     context.role === "owner"
@@ -55,6 +76,31 @@ export function RoleShell({
             </div>
           </div>
           {actions}
+
+          {/* Bouton notifications push */}
+          {notifPermission !== "unsupported" && notifPermission !== "granted" && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="hidden sm:flex items-center gap-1.5 text-xs h-8 border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400"
+              onClick={handleEnableNotifications}
+              title="Activer les notifications push"
+            >
+              <Bell className="size-3.5" />
+              <span>Notifs</span>
+            </Button>
+          )}
+          {notifPermission === "granted" && (
+            <span title="Notifications actives" className="hidden sm:flex items-center text-emerald-600">
+              <Bell className="size-4" />
+            </span>
+          )}
+          {notifPermission === "denied" && (
+            <span title="Notifications bloquées" className="hidden sm:flex items-center text-muted-foreground">
+              <BellOff className="size-4" />
+            </span>
+          )}
+
           <Button
             variant="ghost"
             size="icon"

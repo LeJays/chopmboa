@@ -5,6 +5,10 @@ import React, { StrictMode, useEffect, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router";
 import "./index.css";
+import { registerServiceWorker } from "@/lib/push-notifications";
+
+// Enregistrer le Service Worker dès le démarrage (push en arrière-plan)
+registerServiceWorker();
 
 // Lazy load route components for better code splitting
 const Landing = lazy(() => import("./pages/Landing.tsx"));

@@ -355,6 +355,9 @@ export function PosView({
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [editingOrderNumber, setEditingOrderNumber] = useState<string | null>(null);
 
+  // Thank you overlay after payment
+  const [thankYouData, setThankYouData] = useState<{ orderNumber: string; amount: number } | null>(null);
+
   // 4. Data processing
   const orders = ordersPoll.data ?? [];
   const menuItems = menuPoll.data ?? [];
@@ -502,12 +505,7 @@ export function PosView({
       if (editingOrderId) {
         // Encaisser la commande existante préremplie
         await markPaid({ orderId: editingOrderId });
-        toast.success(
-          <div className="flex flex-col">
-            <span className="font-bold">Facture encaissée !</span>
-            <span className="text-xs">Ticket: {editingOrderNumber} · {formatFcfa(totalToPay)}</span>
-          </div>
-        );
+        setThankYouData({ orderNumber: editingOrderNumber ?? "", amount: totalToPay });
       } else {
         // Créer une nouvelle vente
         const orderRes = await createOrderAction({
@@ -524,13 +522,7 @@ export function PosView({
 
         // Marquer payé
         await markPaid({ orderId: orderRes.id });
-
-        toast.success(
-          <div className="flex flex-col">
-            <span className="font-bold">Vente enregistrée !</span>
-            <span className="text-xs">Ticket: {orderRes.orderNumber} · {formatFcfa(totalToPay)}</span>
-          </div>
-        );
+        setThankYouData({ orderNumber: orderRes.orderNumber ?? orderRes.order_number ?? "", amount: totalToPay });
       }
       
       clearCart();
@@ -548,7 +540,7 @@ export function PosView({
     setPendingId(o.id);
     try {
       await markPaid({ orderId: o.id });
-      toast.success(`${o.order_number} — ${formatFcfa(o.total_fcfa)} encaissés.`);
+      setThankYouData({ orderNumber: o.order_number, amount: o.total_fcfa });
       ordersPoll.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Encaissement impossible.");
@@ -559,6 +551,46 @@ export function PosView({
 
   const inner = (
     <div className="space-y-4">
+      {/* Thank-you overlay après encaissement */}
+      {thankYouData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+             onClick={() => setThankYouData(null)}>
+          <div
+            className="relative w-full max-w-sm rounded-3xl bg-card border border-border shadow-2xl p-8 text-center space-y-4 animate-in zoom-in-90 fade-in duration-300"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Confetti emoji ring */}
+            <div className="flex justify-center">
+              <div className="size-20 rounded-full bg-emerald-100 border-4 border-emerald-300 flex items-center justify-center text-4xl shadow-inner">
+                🎉
+              </div>
+            </div>
+            <div className="space-y-1">
+              <h2 className="text-2xl font-black text-foreground">Merci !</h2>
+              <p className="text-sm text-muted-foreground font-medium">
+                Paiement confirmé avec succès
+              </p>
+            </div>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-5 py-4 space-y-1">
+              <p className="text-xs text-emerald-700 font-semibold uppercase tracking-wider">Montant encaissé</p>
+              <p className="text-3xl font-black text-emerald-700">{formatFcfa(thankYouData.amount)}</p>
+              {thankYouData.orderNumber && (
+                <p className="text-xs text-emerald-600">Ticket : {thankYouData.orderNumber}</p>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground italic">
+              Bonne dégustation et à très bientôt ! 🍽️
+            </p>
+            <Button
+              className="w-full h-11 font-bold rounded-xl"
+              onClick={() => setThankYouData(null)}
+            >
+              <Check className="size-4 mr-2" />
+              Nouvelle vente
+            </Button>
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         {/* Left column (8 cols): Switcher and Active view */}
         <div className="lg:col-span-8 space-y-4">
@@ -1094,18 +1126,54 @@ export function WaiterView({
   const ordersPoll = usePollAction<ActiveOrder[]>(
     api.orders.activeWithItems,
     { restaurantId },
-    10_000,
+    6_000,
   );
   const setStatus = useAction(api.orders.setStatus);
+  const claimOrder = useAction(api.orders.claimOrder);
+  const unclaimOrder = useAction(api.orders.unclaimOrder);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const prevReadyIds = useRef<Set<string>>(new Set());
 
-  const orders = ordersPoll.data ?? [];
+  // userId courant du serveur (pour savoir si la commande lui appartient)
+  const myUserId = context.userId;
 
-  const serve = async (o: ActiveOrder) => {
+  const orders = (ordersPoll.data ?? []).filter(
+    (o) => !["served", "delivered", "cancelled"].includes(o.status),
+  );
+
+  // Alerte sonore + toast quand une commande passe à "ready" et m'appartient
+  useEffect(() => {
+    const readyMine = orders.filter(
+      (o) => o.status === "ready" && (o as any).waiter_id === myUserId,
+    );
+    readyMine.forEach((o) => {
+      if (!prevReadyIds.current.has(o.id)) {
+        try {
+          const ctx = new AudioContext();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.frequency.value = 1047; // Do5 — son distinct de la cuisine
+          gain.gain.setValueAtTime(0.2, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.8);
+        } catch { /* audio non critique */ }
+        toast(`🍽️ ${o.order_number} est prête — à servir !`, {
+          description: (o as any).table_number ? `Table ${(o as any).table_number}` : o.customer_name ?? "",
+          duration: 8000,
+        });
+      }
+    });
+    prevReadyIds.current = new Set(readyMine.map((o) => o.id));
+  }, [orders, myUserId]);
+
+  const claim = async (o: ActiveOrder) => {
     setPendingId(o.id);
     try {
-      await setStatus({ orderId: o.id, status: "served" });
-      toast.success(`${o.order_number} servie.`);
+      await claimOrder({ orderId: o.id });
+      toast.success(`${o.order_number} — prise en charge !`);
       ordersPoll.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Action impossible.");
@@ -1114,54 +1182,183 @@ export function WaiterView({
     }
   };
 
-  const inner = (
-    <>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {orders.map((o) => (
-          <Card key={o.id} className="border-border/70 shadow-none">
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-base">{o.order_number}</CardTitle>
-                <StatusPill status={o.status} />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {ORDER_TYPE_LABELS[o.order_type]}
-                {o.customer_name ? ` · ${o.customer_name}` : ""}
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <ul className="space-y-1 text-sm">
-                {(o.items || []).map((it) => (
-                  <li key={it.id}>
-                    <span className="font-semibold text-primary">{it.quantity}×</span>{" "}
-                    {it.item_name}
-                  </li>
-                ))}
-              </ul>
-              {o.status === "ready" && (
-                <Button
-                  className="w-full"
-                  size="sm"
-                  disabled={pendingId === o.id}
-                  onClick={() => void serve(o)}
-                >
-                  {pendingId === o.id && (
-                    <Loader2 className="mr-2 size-4 animate-spin" />
-                  )}
-                  Marquer servie
-                </Button>
+  const unclaim = async (o: ActiveOrder) => {
+    setPendingId(o.id);
+    try {
+      await unclaimOrder({ orderId: o.id });
+      ordersPoll.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Action impossible.");
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  const serve = async (o: ActiveOrder) => {
+    setPendingId(o.id);
+    try {
+      await setStatus({ orderId: o.id, status: "served" });
+      toast.success(`${o.order_number} servie. Bon appétit !`);
+      ordersPoll.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Action impossible.");
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  const mine = orders.filter((o) => (o as any).waiter_id === myUserId);
+  const others = orders.filter((o) => (o as any).waiter_id !== myUserId);
+
+  const WaiterOrderCard = ({ o }: { o: ActiveOrder }) => {
+    const isMe = (o as any).waiter_id === myUserId;
+    const isClaimed = !!(o as any).waiter_id;
+    const tableNumber = (o as any).table_number as string | null;
+    const waiterName = (o as any).waiter_name as string | null;
+    const waiterAvatar = (o as any).waiter_avatar as string | null;
+    const isPending = pendingId === o.id;
+
+    return (
+      <Card
+        className={`shadow-none transition-all ${
+          isMe && o.status === "ready"
+            ? "border-emerald-400 ring-2 ring-emerald-200 bg-emerald-50/30 dark:bg-emerald-950/20"
+            : isMe
+            ? "border-primary/50 bg-primary/5"
+            : "border-border/70"
+        }`}
+      >
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <CardTitle className="text-base shrink-0">{o.order_number}</CardTitle>
+              {tableNumber && (
+                <Badge variant="outline" className="text-[10px] shrink-0">
+                  Table {tableNumber}
+                </Badge>
               )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-      {orders.length === 0 && (
-        <p className="py-16 text-center text-sm text-muted-foreground">
-          Aucune commande en cours. Les commandes QR des tables apparaissent ici
-          automatiquement.
-        </p>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {isMe && (
+                <Badge className="bg-primary/10 text-primary border-primary/30 text-[10px]">
+                  Ma commande
+                </Badge>
+              )}
+              <StatusPill status={o.status} />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {ORDER_TYPE_LABELS[o.order_type]}
+            {o.customer_name ? ` · ${o.customer_name}` : ""}
+          </p>
+        </CardHeader>
+
+        <CardContent className="space-y-3">
+          {/* Articles */}
+          <ul className="space-y-1 text-sm">
+            {(o.items || []).map((it) => (
+              <li key={it.id}>
+                <span className="font-semibold text-primary">{it.quantity}×</span>{" "}
+                {it.item_name}
+              </li>
+            ))}
+          </ul>
+
+          {/* Waiter assigné (autre que moi) */}
+          {isClaimed && !isMe && waiterName && (
+            <div className="flex items-center gap-2 rounded-lg bg-muted/50 px-2.5 py-2 text-xs text-muted-foreground border border-border/50">
+              {waiterAvatar ? (
+                <img src={waiterAvatar} alt={waiterName} className="size-5 rounded-full object-cover shrink-0" />
+              ) : (
+                <div className="size-5 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
+                  <span className="text-[9px] font-bold text-primary">{waiterName[0]}</span>
+                </div>
+              )}
+              <span>Pris par <strong>{waiterName}</strong></span>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex gap-2 pt-1">
+            {!isClaimed && (
+              <Button
+                className="flex-1"
+                size="sm"
+                disabled={isPending}
+                onClick={() => void claim(o)}
+              >
+                {isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+                Prendre en charge
+              </Button>
+            )}
+
+            {isMe && o.status !== "ready" && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs text-muted-foreground"
+                disabled={isPending}
+                onClick={() => void unclaim(o)}
+              >
+                Relâcher
+              </Button>
+            )}
+
+            {isMe && o.status === "ready" && (
+              <Button
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                size="sm"
+                disabled={isPending}
+                onClick={() => void serve(o)}
+              >
+                {isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+                ✓ Servir à la table
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const inner = (
+    <div className="space-y-6">
+      {/* Mes commandes */}
+      {mine.length > 0 && (
+        <section>
+          <h2 className="mb-3 flex items-center gap-2 px-1 text-sm font-bold uppercase tracking-wide text-primary">
+            <Utensils className="size-4" />
+            Mes commandes
+            <Badge className="bg-primary/15 text-primary border-primary/30">{mine.length}</Badge>
+          </h2>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {mine.map((o) => <WaiterOrderCard key={o.id} o={o} />)}
+          </div>
+        </section>
       )}
-    </>
+
+      {/* Commandes libres ou prises par d'autres */}
+      <section>
+        <h2 className="mb-3 flex items-center gap-2 px-1 text-sm font-bold uppercase tracking-wide text-muted-foreground">
+          <CircleCheck className="size-4" />
+          Toutes les commandes
+          <Badge variant="secondary">{others.length}</Badge>
+        </h2>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {others.map((o) => <WaiterOrderCard key={o.id} o={o} />)}
+        </div>
+        {others.length === 0 && mine.length === 0 && (
+          <p className="py-16 text-center text-sm text-muted-foreground">
+            Aucune commande en cours. Les commandes des tables apparaissent ici automatiquement.
+          </p>
+        )}
+        {others.length === 0 && mine.length > 0 && (
+          <p className="py-4 text-center text-sm text-muted-foreground">
+            Toutes les commandes sont déjà prises en charge.
+          </p>
+        )}
+      </section>
+    </div>
   );
 
   if (embedded) return inner;

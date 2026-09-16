@@ -86,6 +86,8 @@ export default function TableMenu() {
     totalFcfa: number;
     paymentMethod?: string;
     status: string;
+    waiterName?: string | null;
+    waiterAvatar?: string | null;
   } | null>(null);
 
   const getOrder = useAction(api.orders.get);
@@ -123,6 +125,8 @@ export default function TableMenu() {
         return {
           ...prev,
           status: mapped.status,
+          waiterName: (updated as any).waiter_name ?? prev.waiterName,
+          waiterAvatar: (updated as any).waiter_avatar ?? prev.waiterAvatar,
         };
       });
     } catch (err) {
@@ -271,18 +275,18 @@ export default function TableMenu() {
         icon: Clock,
         activeColors: "bg-amber-100 border-amber-300 text-amber-700",
         doneColors: "bg-emerald-100 border-emerald-300 text-emerald-700",
-        isDone: ["preparing", "ready", "served", "delivered"].includes(currentStatus),
+        isDone: ["in_kitchen", "ready", "served", "delivered"].includes(currentStatus),
         isActive: currentStatus === "pending",
       },
       {
-        key: "preparing",
+        key: "in_kitchen",
         label: "Préparation",
         desc: "Le chef prépare votre commande.",
         icon: ChefHat,
         activeColors: "bg-orange-100 border-orange-300 text-orange-700 animate-pulse",
         doneColors: "bg-emerald-100 border-emerald-300 text-emerald-700",
         isDone: ["ready", "served", "delivered"].includes(currentStatus),
-        isActive: currentStatus === "preparing",
+        isActive: currentStatus === "in_kitchen" || currentStatus === "confirmed",
       },
       {
         key: "ready",
@@ -293,6 +297,10 @@ export default function TableMenu() {
         doneColors: "bg-emerald-100 border-emerald-300 text-emerald-700",
         isDone: ["served", "delivered"].includes(currentStatus),
         isActive: currentStatus === "ready",
+        // Afficher le waiter assigné quand la commande est prête ou servie
+        waiterSlot: ["ready", "served", "delivered"].includes(currentStatus) && placed.waiterName
+          ? { name: placed.waiterName, avatar: placed.waiterAvatar ?? null }
+          : null,
       },
       {
         key: "served",
@@ -304,7 +312,7 @@ export default function TableMenu() {
         isDone: ["served", "delivered"].includes(currentStatus),
         isActive: ["served", "delivered"].includes(currentStatus),
       },
-    ];
+    ] as const;
 
     return (
       <main className="flex min-h-screen flex-col items-center bg-background px-4 py-8 max-w-sm mx-auto relative text-center">
@@ -356,13 +364,35 @@ export default function TableMenu() {
                   <div className={`flex size-10 items-center justify-center rounded-full border-2 shrink-0 ${iconStyle} transition-colors duration-300`}>
                     {step.isDone ? <Check className="size-5 stroke-[3]" /> : <Icon className="size-5" />}
                   </div>
-                  <div className="space-y-0.5 pt-1">
+                  <div className="space-y-0.5 pt-1 flex-1">
                     <h3 className={`text-sm font-extrabold ${step.isActive ? "text-primary" : step.isDone ? "text-foreground" : "text-muted-foreground"}`}>
                       {step.label}
                     </h3>
                     <p className={`text-xs ${step.isActive ? "text-foreground/80 font-medium" : "text-muted-foreground"}`}>
                       {step.desc}
                     </p>
+                    {/* Waiter assigné — affiché sur l'étape "Prête" */}
+                    {"waiterSlot" in step && step.waiterSlot && (
+                      <div className="flex items-center gap-2 mt-2 bg-primary/5 border border-primary/20 rounded-xl px-3 py-2">
+                        {step.waiterSlot.avatar ? (
+                          <img
+                            src={step.waiterSlot.avatar}
+                            alt={step.waiterSlot.name}
+                            className="size-7 rounded-full object-cover border border-primary/30 shrink-0"
+                          />
+                        ) : (
+                          <div className="size-7 rounded-full bg-primary/20 flex items-center justify-center shrink-0 border border-primary/30">
+                            <span className="text-[11px] font-bold text-primary">
+                              {step.waiterSlot.name[0]}
+                            </span>
+                          </div>
+                        )}
+                        <div>
+                          <p className="text-[10px] text-muted-foreground font-medium">Attribué à</p>
+                          <p className="text-xs font-bold text-foreground">{step.waiterSlot.name}</p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               );

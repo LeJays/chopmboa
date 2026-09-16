@@ -1132,6 +1132,7 @@ export interface StaffDraft {
   email: string;
   password: string;
   role: string;
+  avatarUrl?: string | null;
 }
 
 export function StaffDialog({
@@ -1147,11 +1148,29 @@ export function StaffDialog({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("waiter");
+  const [avatarUrl, setAvatarUrl] = useState("");
+  const [isProcessingAvatar, setIsProcessingAvatar] = useState(false);
   const [pending, setPending] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const canSubmit =
     fullName.trim().length >= 2 && emailOk && password.length >= 8 && !pending;
+
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsProcessingAvatar(true);
+      const dataUrl = await fileToDataUrl(file, 256, 256);
+      setAvatarUrl(dataUrl);
+    } catch (err) {
+      console.error("Avatar read error:", err);
+    } finally {
+      setIsProcessingAvatar(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = "";
+    }
+  };
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -1162,11 +1181,13 @@ export function StaffDialog({
         email,
         password,
         role,
+        avatarUrl: avatarUrl.trim() || null,
       });
       setFullName("");
       setEmail("");
       setPassword("");
       setRole("waiter");
+      setAvatarUrl("");
     } finally {
       setPending(false);
     }
@@ -1184,6 +1205,42 @@ export function StaffDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
+          {/* Photo de profil */}
+          <div className="flex items-center gap-4">
+            <div
+              onClick={() => avatarInputRef.current?.click()}
+              className="relative size-16 rounded-full border-2 border-dashed border-border hover:border-primary cursor-pointer overflow-hidden bg-muted flex items-center justify-center transition-colors shrink-0"
+            >
+              {avatarUrl ? (
+                <img src={avatarUrl} alt="Avatar" className="size-full object-cover" />
+              ) : isProcessingAvatar ? (
+                <Loader2 className="size-5 animate-spin text-muted-foreground" />
+              ) : (
+                <Upload className="size-5 text-muted-foreground" />
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold">Photo de profil</p>
+              <p className="text-xs text-muted-foreground">Optionnel — visible par les clients lors du suivi de commande.</p>
+              {avatarUrl && (
+                <button
+                  type="button"
+                  onClick={() => setAvatarUrl("")}
+                  className="text-xs text-destructive hover:underline mt-1 flex items-center gap-1"
+                >
+                  <X className="size-3" /> Supprimer
+                </button>
+              )}
+            </div>
+            <input
+              ref={avatarInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleAvatarChange}
+            />
+          </div>
+
           <div className="space-y-2">
             <Label htmlFor="s-name">Nom complet *</Label>
             <Input
