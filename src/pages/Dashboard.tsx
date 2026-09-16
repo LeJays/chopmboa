@@ -51,6 +51,9 @@ import {
   UtensilsCrossed,
   Wallet,
   Zap,
+  CreditCard,
+  ShoppingBag,
+  Star,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
@@ -81,7 +84,7 @@ import {
   type UIKpis,
 } from "@/lib/neonMappers";
 import { usePollAction } from "@/hooks/use-poll";
-import { useStaffContext, ROLE_HOME } from "@/hooks/use-staff-context";
+import { useStaffContext, ROLE_HOME, type StaffContext } from "@/hooks/use-staff-context";
 import logo from "@/assets/logo.svg";
 import {
   CreateRestaurantDialog,
@@ -100,6 +103,7 @@ import {
   RevenueBars,
   StatusBadge,
 } from "@/components/dashboard/widgets";
+import { KitchenView, PosView, WaiterView, DeliveriesView } from "./RoleWorkspaces";
 
 const ROLE_LABELS: Record<string, string> = {
   manager: "Gérant",
@@ -645,7 +649,7 @@ export default function Dashboard() {
             <Button
               variant="outline"
               className="h-14 justify-start gap-3 hover:border-primary hover:bg-primary/5 transition-all w-full cursor-pointer"
-              onClick={() => navigate("/pos")}
+              onClick={() => setTab("caisse")}
             >
               <span className="text-xl">💰</span>
               <div className="text-left min-w-0">
@@ -657,7 +661,7 @@ export default function Dashboard() {
             <Button
               variant="outline"
               className="h-14 justify-start gap-3 hover:border-primary hover:bg-primary/5 transition-all w-full cursor-pointer"
-              onClick={() => navigate("/kitchen")}
+              onClick={() => setTab("cuisine")}
             >
               <span className="text-xl">🍳</span>
               <div className="text-left min-w-0">
@@ -669,7 +673,7 @@ export default function Dashboard() {
             <Button
               variant="outline"
               className="h-14 justify-start gap-3 hover:border-primary hover:bg-primary/5 transition-all w-full cursor-pointer"
-              onClick={() => navigate("/waiter")}
+              onClick={() => setTab("serveur")}
             >
               <span className="text-xl">🏃‍♂️</span>
               <div className="text-left min-w-0">
@@ -681,7 +685,7 @@ export default function Dashboard() {
             <Button
               variant="outline"
               className="h-14 justify-start gap-3 hover:border-primary hover:bg-primary/5 transition-all w-full cursor-pointer"
-              onClick={() => navigate("/deliveries")}
+              onClick={() => setTab("livraison")}
             >
               <span className="text-xl">🛵</span>
               <div className="text-left min-w-0">
@@ -693,11 +697,15 @@ export default function Dashboard() {
         </div>
 
         <Tabs value={tab} onValueChange={setTab} className="mt-6">
-          <TabsList className="w-full justify-start overflow-x-auto sm:w-auto">
+          <TabsList className="w-full justify-start overflow-x-auto sm:w-auto flex-wrap gap-1">
             <TabsTrigger value="overview">Vue d'ensemble</TabsTrigger>
             <TabsTrigger value="orders">Commandes</TabsTrigger>
             <TabsTrigger value="menu">Menu</TabsTrigger>
             <TabsTrigger value="tables">Tables & QR</TabsTrigger>
+            <TabsTrigger value="caisse">💰 Caisse</TabsTrigger>
+            <TabsTrigger value="cuisine">🍳 Cuisine</TabsTrigger>
+            <TabsTrigger value="serveur">🏃‍♂️ Serveurs</TabsTrigger>
+            <TabsTrigger value="livraison">🛵 Livraisons</TabsTrigger>
             <TabsTrigger value="abonnement">Abonnement</TabsTrigger>
             <TabsTrigger value="audit">Journal</TabsTrigger>
           </TabsList>
@@ -749,6 +757,138 @@ export default function Dashboard() {
                 )}
               </CardContent>
             </Card>
+
+            {/* Nouvelles Analyses - Vue d'ensemble du restaurant sélectionné */}
+            <div className="grid gap-4 md:grid-cols-3">
+              {/* Carte 1: Répartition des paiements */}
+              <Card className="border-border/70 shadow-none">
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm font-bold">Modes de paiement</CardTitle>
+                    <CreditCard className="size-4 text-muted-foreground" />
+                  </div>
+                  <CardDescription>Transactions validées aujourd'hui</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3 pt-2">
+                  {kpisPoll.data?.paymentMethodBreakdown ? (
+                    <>
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-medium text-foreground flex items-center gap-1.5">
+                            <span className="size-2 rounded-full bg-emerald-500 inline-block" />
+                            💵 Cash / Espèces
+                          </span>
+                          <span className="font-extrabold text-foreground">
+                            {formatFcfa(kpisPoll.data.paymentMethodBreakdown.cashVolume)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-[10px] text-muted-foreground pl-3">
+                          <span>{kpisPoll.data.paymentMethodBreakdown.cash} commande(s)</span>
+                          <span>
+                            {kpisPoll.data.ordersToday > 0 
+                              ? Math.round((kpisPoll.data.paymentMethodBreakdown.cash / kpisPoll.data.ordersToday) * 100) 
+                              : 0}%
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1 pt-1.5 border-t border-border/50">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-medium text-foreground flex items-center gap-1.5">
+                            <span className="size-2 rounded-full bg-orange-500 inline-block" />
+                            📱 Mobile Money
+                          </span>
+                          <span className="font-extrabold text-foreground">
+                            {formatFcfa(kpisPoll.data.paymentMethodBreakdown.momoVolume)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-[10px] text-muted-foreground pl-3">
+                          <span>{kpisPoll.data.paymentMethodBreakdown.momo} commande(s)</span>
+                          <span>
+                            {kpisPoll.data.ordersToday > 0 
+                              ? Math.round((kpisPoll.data.paymentMethodBreakdown.momo / kpisPoll.data.ordersToday) * 100) 
+                              : 0}%
+                          </span>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <Skeleton className="h-20" />
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Carte 2: Canaux de service */}
+              <Card className="border-border/70 shadow-none">
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm font-bold">Canaux de service</CardTitle>
+                    <ShoppingBag className="size-4 text-muted-foreground" />
+                  </div>
+                  <CardDescription>Commandes d'aujourd'hui</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3 pt-2">
+                  {kpisPoll.data?.orderTypeBreakdown ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground flex items-center gap-2">
+                          <span className="size-1.5 rounded-full bg-blue-500" />
+                          🍽️ Sur place
+                        </span>
+                        <span className="font-extrabold">{kpisPoll.data.orderTypeBreakdown.dine_in}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs border-t border-border/40 pt-2">
+                        <span className="text-muted-foreground flex items-center gap-2">
+                          <span className="size-1.5 rounded-full bg-indigo-500" />
+                          🛵 Livraison
+                        </span>
+                        <span className="font-extrabold">{kpisPoll.data.orderTypeBreakdown.delivery}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs border-t border-border/40 pt-2">
+                        <span className="text-muted-foreground flex items-center gap-2">
+                          <span className="size-1.5 rounded-full bg-amber-500" />
+                          🛍️ À emporter
+                        </span>
+                        <span className="font-extrabold">{kpisPoll.data.orderTypeBreakdown.takeout}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <Skeleton className="h-20" />
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Carte 3: Top Plats les plus vendus */}
+              <Card className="border-border/70 shadow-none">
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm font-bold">Top Plats vendus</CardTitle>
+                    <Star className="size-4 text-amber-500 fill-amber-500" />
+                  </div>
+                  <CardDescription>Plats les plus populaires de l'établissement</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2 pt-1">
+                  {kpisPoll.data?.topItems && kpisPoll.data.topItems.length > 0 ? (
+                    kpisPoll.data.topItems.map((item: any, idx: number) => (
+                      <div key={item.name} className="flex items-center justify-between text-xs">
+                        <span className="truncate max-w-[150px] font-medium text-foreground">
+                          {idx + 1}. {item.name}
+                        </span>
+                        <span className="font-extrabold shrink-0 text-muted-foreground text-[11px]">
+                          {item.quantity_sold} portion(s)
+                        </span>
+                      </div>
+                    ))
+                  ) : kpisPoll.data?.topItems ? (
+                    <div className="text-center py-4 text-xs text-muted-foreground">
+                      Aucune vente enregistrée pour le moment.
+                    </div>
+                  ) : (
+                    <Skeleton className="h-20" />
+                  )}
+                </CardContent>
+              </Card>
+            </div>
 
             <div className="grid gap-4 lg:grid-cols-2">
               <Card className="border-border/70 shadow-none">
@@ -1156,15 +1296,11 @@ export default function Dashboard() {
                       <Button
                         size="sm"
                         variant="outline"
-                        className="flex-1"
-                        onClick={() =>
-                          run(
-                            () => cycleTable({ tableId: t.id }),
-                            "État de la table mis à jour.",
-                          )
-                        }
+                        className="flex-1 text-muted-foreground cursor-not-allowed bg-muted/20 hover:bg-muted/20"
+                        disabled
+                        title="L'état de la table est automatique : 'libre' ou 'occupé' selon les commandes et paiements."
                       >
-                        État
+                        Auto
                       </Button>
                       <Button
                         size="sm"
@@ -1303,6 +1439,126 @@ export default function Dashboard() {
                     title="Journal vide"
                     hint="Chaque action sensible est tracée ici."
                   />
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="caisse" className="mt-6 space-y-4">
+            <Card className="border-border/70 shadow-none">
+              <CardHeader>
+                <CardTitle>Caisse & Encaissement</CardTitle>
+                <CardDescription>
+                  Gérez les encaissements, marquez les commandes payées et suivez les règlements.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {activeId ? (
+                  <PosView
+                    restaurantId={activeId}
+                    context={staffContext || {
+                      userId: user?.id || "",
+                      fullName: user?.email || "Propriétaire",
+                      email: user?.email || null,
+                      role: "owner",
+                      restaurants: (restaurants || []).map(r => ({ id: r.id, name: r.name, isOwner: true })),
+                      primaryRestaurantId: activeId,
+                      primaryRestaurantName: restaurants?.find(r => r.id === activeId)?.name || null
+                    }}
+                    embedded
+                  />
+                ) : (
+                  <EmptyState title="Aucun restaurant sélectionné" hint="Veuillez sélectionner ou créer un restaurant pour accéder à la caisse." />
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="cuisine" className="mt-6 space-y-4">
+            <Card className="border-border/70 shadow-none">
+              <CardHeader>
+                <CardTitle>Écran de Préparation Cuisine</CardTitle>
+                <CardDescription>
+                  Suivez les commandes en temps réel et marquez les préparations prêtes.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {activeId ? (
+                  <KitchenView
+                    restaurantId={activeId}
+                    context={staffContext || {
+                      userId: user?.id || "",
+                      fullName: user?.email || "Propriétaire",
+                      email: user?.email || null,
+                      role: "owner",
+                      restaurants: (restaurants || []).map(r => ({ id: r.id, name: r.name, isOwner: true })),
+                      primaryRestaurantId: activeId,
+                      primaryRestaurantName: restaurants?.find(r => r.id === activeId)?.name || null
+                    }}
+                    embedded
+                  />
+                ) : (
+                  <EmptyState title="Aucun restaurant sélectionné" hint="Veuillez sélectionner ou créer un restaurant pour accéder à la cuisine." />
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="serveur" className="mt-6 space-y-4">
+            <Card className="border-border/70 shadow-none">
+              <CardHeader>
+                <CardTitle>Service de Table & Salle</CardTitle>
+                <CardDescription>
+                  Suivez le statut de préparation de chaque table et marquez les plats comme servis.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {activeId ? (
+                  <WaiterView
+                    restaurantId={activeId}
+                    context={staffContext || {
+                      userId: user?.id || "",
+                      fullName: user?.email || "Propriétaire",
+                      email: user?.email || null,
+                      role: "owner",
+                      restaurants: (restaurants || []).map(r => ({ id: r.id, name: r.name, isOwner: true })),
+                      primaryRestaurantId: activeId,
+                      primaryRestaurantName: restaurants?.find(r => r.id === activeId)?.name || null
+                    }}
+                    embedded
+                  />
+                ) : (
+                  <EmptyState title="Aucun restaurant sélectionné" hint="Veuillez sélectionner ou créer un restaurant pour accéder au service." />
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="livraison" className="mt-6 space-y-4">
+            <Card className="border-border/70 shadow-none">
+              <CardHeader>
+                <CardTitle>Livreurs & Courses</CardTitle>
+                <CardDescription>
+                  Gérez l'expédition des livraisons, le départ en course et la finalisation des livraisons à domicile.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {activeId ? (
+                  <DeliveriesView
+                    restaurantId={activeId}
+                    context={staffContext || {
+                      userId: user?.id || "",
+                      fullName: user?.email || "Propriétaire",
+                      email: user?.email || null,
+                      role: "owner",
+                      restaurants: (restaurants || []).map(r => ({ id: r.id, name: r.name, isOwner: true })),
+                      primaryRestaurantId: activeId,
+                      primaryRestaurantName: restaurants?.find(r => r.id === activeId)?.name || null
+                    }}
+                    embedded
+                  />
+                ) : (
+                  <EmptyState title="Aucun restaurant sélectionné" hint="Veuillez sélectionner ou créer un restaurant pour accéder aux livraisons." />
                 )}
               </CardContent>
             </Card>

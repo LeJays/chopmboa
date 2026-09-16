@@ -25,6 +25,12 @@ import {
   Plus,
   Store,
   UtensilsCrossed,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  AlertCircle,
+  RefreshCw,
+  Bell,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
@@ -74,7 +80,68 @@ export default function TableMenu() {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "mobile_money">("cash");
   const [pending, setPending] = useState(false);
-  const [placed, setPlaced] = useState<{ orderNumber: string; totalFcfa: number; paymentMethod?: string } | null>(null);
+  const [placed, setPlaced] = useState<{
+    id: string;
+    orderNumber: string;
+    totalFcfa: number;
+    paymentMethod?: string;
+    status: string;
+  } | null>(null);
+
+  const getOrder = useAction(api.orders.get);
+  const [trackingLoading, setTrackingLoading] = useState(false);
+
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case "pending":
+        return "En attente";
+      case "preparing":
+        return "En préparation";
+      case "ready":
+        return "Prête !";
+      case "served":
+        return "Servie";
+      case "delivered":
+        return "Livrée";
+      case "cancelled":
+        return "Annulée";
+      default:
+        return status;
+    }
+  };
+
+  const fetchTrackingUpdate = async () => {
+    if (!placed?.id) return;
+    try {
+      const updated = (await getOrder({ orderId: placed.id })) as any;
+      const mapped = mapOrder(updated);
+      setPlaced((prev) => {
+        if (!prev) return null;
+        if (prev.status !== mapped.status) {
+          toast.info(`Statut de votre commande mis à jour : ${getStatusLabel(mapped.status)}`);
+        }
+        return {
+          ...prev,
+          status: mapped.status,
+        };
+      });
+    } catch (err) {
+      console.warn("Tracking update failed:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (!placed?.id) return;
+    
+    // Initial fetch
+    void fetchTrackingUpdate();
+
+    const interval = setInterval(() => {
+      void fetchTrackingUpdate();
+    }, 6000); // Poll every 6 seconds
+
+    return () => clearInterval(interval);
+  }, [placed?.id]);
 
   useEffect(() => {
     if (!token) return;
@@ -145,9 +212,11 @@ export default function TableMenu() {
       })) as any;
       const mapped = mapOrder(res);
       setPlaced({
+        id: mapped.id,
         orderNumber: mapped.orderNumber,
         totalFcfa: mapped.totalFcfa,
-        paymentMethod
+        paymentMethod,
+        status: mapped.status || "pending",
       });
       setCart({});
       setCheckoutOpen(false);
@@ -188,68 +257,201 @@ export default function TableMenu() {
     );
   }
 
-  /* --------------------------- success ------------------------------- */
+  /* --------------------------- success & tracking --------------------- */
   if (placed) {
+    const currentStatus = placed.status || "pending";
+    const isCancelled = currentStatus === "cancelled";
+
+    // Define progress steps
+    const steps = [
+      {
+        key: "pending",
+        label: "Validation",
+        desc: "Commande reçue, en cours de validation.",
+        icon: Clock,
+        activeColors: "bg-amber-100 border-amber-300 text-amber-700",
+        doneColors: "bg-emerald-100 border-emerald-300 text-emerald-700",
+        isDone: ["preparing", "ready", "served", "delivered"].includes(currentStatus),
+        isActive: currentStatus === "pending",
+      },
+      {
+        key: "preparing",
+        label: "Préparation",
+        desc: "Le chef prépare votre commande.",
+        icon: ChefHat,
+        activeColors: "bg-orange-100 border-orange-300 text-orange-700 animate-pulse",
+        doneColors: "bg-emerald-100 border-emerald-300 text-emerald-700",
+        isDone: ["ready", "served", "delivered"].includes(currentStatus),
+        isActive: currentStatus === "preparing",
+      },
+      {
+        key: "ready",
+        label: "Prête !",
+        desc: "Votre commande est prête.",
+        icon: Bell,
+        activeColors: "bg-blue-100 border-blue-300 text-blue-700",
+        doneColors: "bg-emerald-100 border-emerald-300 text-emerald-700",
+        isDone: ["served", "delivered"].includes(currentStatus),
+        isActive: currentStatus === "ready",
+      },
+      {
+        key: "served",
+        label: "Dégustation",
+        desc: "Bon appétit !",
+        icon: UtensilsCrossed,
+        activeColors: "bg-emerald-100 border-emerald-300 text-emerald-700",
+        doneColors: "bg-emerald-100 border-emerald-300 text-emerald-700",
+        isDone: ["served", "delivered"].includes(currentStatus),
+        isActive: ["served", "delivered"].includes(currentStatus),
+      },
+    ];
+
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-background px-4 max-w-sm mx-auto text-center py-12">
-        <div className="flex size-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 mx-auto">
-          <Check className="size-8" />
+      <main className="flex min-h-screen flex-col items-center bg-background px-4 py-8 max-w-sm mx-auto relative text-center">
+        {/* Header simple */}
+        <div className="flex items-center gap-2 mb-6">
+          <img src={logo} alt="ChopMboa" className="size-8 rounded-xl" />
+          <span className="font-extrabold text-sm tracking-tight">{info.restaurantName}</span>
         </div>
-        <h1 className="mt-6 text-2xl font-extrabold">Commande reçue !</h1>
-        
-        <div className="mt-4 p-4 rounded-2xl bg-muted/30 border border-border w-full text-left space-y-3">
+
+        {/* Live Status Header */}
+        <div className="w-full text-center space-y-2 mb-6">
+          {isCancelled ? (
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">
+              <XCircle className="size-4" />
+              <span>Commande annulée</span>
+            </div>
+          ) : (
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+              </span>
+              <span>Suivi en temps réel</span>
+            </div>
+          )}
+          <h1 className="text-2xl font-black tracking-tight">
+            {isCancelled ? "Commande annulée" : "Où en est mon plat ?"}
+          </h1>
+          <p className="text-xs text-muted-foreground">
+            {isCancelled 
+              ? "Cette commande a été annulée par l'établissement."
+              : "La cuisine et les serveurs s'activent pour vous."}
+          </p>
+        </div>
+
+        {/* Tracking Timeline */}
+        {!isCancelled && (
+          <div className="w-full p-5 bg-card border border-border rounded-2xl shadow-xs space-y-6 relative overflow-hidden mb-6 text-left">
+            <div className="absolute left-9 top-10 bottom-10 w-[2px] bg-muted-foreground/20 z-0" />
+            
+            {steps.map((step) => {
+              const Icon = step.icon;
+              let iconStyle = "bg-muted text-muted-foreground border-transparent";
+              if (step.isDone) iconStyle = step.doneColors;
+              else if (step.isActive) iconStyle = step.activeColors;
+
+              return (
+                <div key={step.key} className="flex gap-4 items-start relative z-10">
+                  <div className={`flex size-10 items-center justify-center rounded-full border-2 shrink-0 ${iconStyle} transition-colors duration-300`}>
+                    {step.isDone ? <Check className="size-5 stroke-[3]" /> : <Icon className="size-5" />}
+                  </div>
+                  <div className="space-y-0.5 pt-1">
+                    <h3 className={`text-sm font-extrabold ${step.isActive ? "text-primary" : step.isDone ? "text-foreground" : "text-muted-foreground"}`}>
+                      {step.label}
+                    </h3>
+                    <p className={`text-xs ${step.isActive ? "text-foreground/80 font-medium" : "text-muted-foreground"}`}>
+                      {step.desc}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Cancelled Alert Banner */}
+        {isCancelled && (
+          <div className="w-full p-4 rounded-xl border border-red-200 bg-red-50 text-red-800 text-xs text-left mb-6 space-y-2">
+            <p className="font-bold">Commande non validée ou annulée</p>
+            <p className="text-[11px] leading-relaxed">
+              Il est possible qu'un article commandé ne soit plus disponible ou que le mode de paiement n'ait pas été validé par l'établissement. N'hésitez pas à solliciter un membre de notre équipe !
+            </p>
+          </div>
+        )}
+
+        {/* Order Details Card */}
+        <div className="w-full p-4 rounded-2xl bg-muted/40 border border-border/80 text-left space-y-3 mb-6">
           <div className="flex items-center justify-between text-xs font-bold border-b border-border pb-2">
-            <span>N° Commande:</span>
-            <span className="text-primary">{placed.orderNumber}</span>
+            <span>N° Commande :</span>
+            <span className="text-primary font-extrabold">{placed.orderNumber}</span>
           </div>
           <div className="flex items-center justify-between text-xs font-bold border-b border-border pb-2">
-            <span>Montant total:</span>
-            <span className="text-base text-primary font-extrabold">{formatFcfa(placed.totalFcfa)}</span>
+            <span>Montant total :</span>
+            <span className="text-base text-primary font-black">{formatFcfa(placed.totalFcfa)}</span>
+          </div>
+          <div className="flex items-center justify-between text-xs font-bold border-b border-border pb-2">
+            <span>Table :</span>
+            <span className="text-muted-foreground">Table {info.tableNumber}</span>
           </div>
           <div className="flex items-center justify-between text-xs font-bold">
-            <span>Mode choisi:</span>
-            <span className="text-muted-foreground">{placed.paymentMethod === "mobile_money" ? "📱 Mobile Money" : "💵 Espèces / Cash"}</span>
+            <span>Mode de paiement :</span>
+            <span className="text-muted-foreground">
+              {placed.paymentMethod === "mobile_money" ? "📱 Mobile Money" : "💵 Espèces / Cash"}
+            </span>
           </div>
 
-          {placed.paymentMethod === "mobile_money" && (
+          {/* Mobile Money prompt inside tracking if pending / payment info */}
+          {placed.paymentMethod === "mobile_money" && currentStatus === "pending" && (
             <div className="mt-4 pt-3 border-t border-dashed border-border space-y-2.5">
-              <p className="text-[11px] font-bold text-orange-800">
-                👉 Veuillez effectuer le transfert maintenant :
+              <p className="text-[11px] font-bold text-orange-800 text-center">
+                👉 Veuillez effectuer le transfert si ce n'est pas déjà fait :
               </p>
               
-              <div className="space-y-1.5 text-xs">
+              <div className="grid gap-2 text-xs">
                 {info.momoActive && info.momoNumber && (
-                  <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200">
-                    <p className="font-bold text-amber-800 text-[11px]">MTN Mobile Money</p>
+                  <div className="p-2 rounded-xl bg-amber-50 border border-amber-200">
+                    <p className="font-bold text-amber-800 text-[10px]">MTN Mobile Money</p>
                     <p className="font-extrabold text-foreground mt-0.5">N° : {info.momoNumber}</p>
-                    {info.momoName && <p className="text-[10px] text-muted-foreground">Nom : {info.momoName}</p>}
+                    {info.momoName && <p className="text-[9px] text-muted-foreground">Nom : {info.momoName}</p>}
                   </div>
                 )}
                 {info.omActive && info.omNumber && (
-                  <div className="p-2.5 rounded-xl bg-orange-50 border border-orange-200">
-                    <p className="font-bold text-orange-800 text-[11px]">Orange Money (OM)</p>
+                  <div className="p-2 rounded-xl bg-orange-50 border border-orange-200">
+                    <p className="font-bold text-orange-800 text-[10px]">Orange Money (OM)</p>
                     <p className="font-extrabold text-foreground mt-0.5">N° : {info.omNumber}</p>
-                    {info.omName && <p className="text-[10px] text-muted-foreground">Nom : {info.omName}</p>}
+                    {info.omName && <p className="text-[9px] text-muted-foreground">Nom : {info.omName}</p>}
                   </div>
                 )}
               </div>
-
-              {info.paymentInstructions && (
-                <div className="p-2 bg-muted/40 rounded-lg text-[10.5px] italic text-muted-foreground border border-border">
-                  {info.paymentInstructions}
-                </div>
-              )}
             </div>
           )}
         </div>
 
-        <p className="mt-4 text-xs text-muted-foreground leading-relaxed px-2">
-          La cuisine prépare déjà votre commande. Veuillez présenter votre reçu de paiement ou numéro de commande au serveur ou livreur.
-        </p>
-        
-        <Button className="mt-8 w-full" variant="outline" onClick={() => setPlaced(null)}>
-          Retourner au menu
-        </Button>
+        {/* Buttons / Controls */}
+        <div className="w-full space-y-2 mt-auto">
+          <Button 
+            className="w-full h-11 font-extrabold shadow-sm flex items-center justify-center gap-2" 
+            variant="outline"
+            onClick={async () => {
+              setTrackingLoading(true);
+              await fetchTrackingUpdate();
+              setTimeout(() => setTrackingLoading(false), 600);
+            }}
+            disabled={trackingLoading}
+          >
+            <RefreshCw className={`size-4 ${trackingLoading ? "animate-spin" : ""}`} />
+            <span>{trackingLoading ? "Mise à jour..." : "Actualiser le statut"}</span>
+          </Button>
+
+          <Button 
+            className="w-full h-11 font-extrabold" 
+            variant="ghost" 
+            onClick={() => setPlaced(null)}
+          >
+            Retourner au menu
+          </Button>
+        </div>
       </main>
     );
   }

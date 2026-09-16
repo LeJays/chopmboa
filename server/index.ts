@@ -696,7 +696,7 @@ app.post("/api/actions/:actionRef", async (c) => {
     const resId = body.restaurantId;
 
     const ordersRes = await pool.query(
-      `SELECT status, total_fcfa, created_at FROM orders WHERE restaurant_id = $1::uuid`,
+      `SELECT status, total_fcfa, created_at, payment_method, order_type FROM orders WHERE restaurant_id = $1::uuid`,
       [resId]
     );
 
@@ -707,16 +707,69 @@ app.post("/api/actions/:actionRef", async (c) => {
     let ordersToday = 0;
     let activeOrders = 0;
 
+    let cashCount = 0;
+    let momoCount = 0;
+    let cashVolume = 0;
+    let momoVolume = 0;
+
+    let dineInCount = 0;
+    let deliveryCount = 0;
+    let takeoutCount = 0;
+
+    // Last 7 days dynamic series
+    const last7Days: { dateStr: string; label: string; totalFcfa: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().split("T")[0];
+      const label = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}`;
+      last7Days.push({ dateStr, label, totalFcfa: 0 });
+    }
+
     ordersRes.rows.forEach(o => {
       const dateStr = new Date(o.created_at).toISOString().split("T")[0];
-      if (dateStr === todayStr && o.status !== 'cancelled') {
+      const isToday = dateStr === todayStr;
+
+      // Add to last 7 days chart data (exclude cancelled orders)
+      if (o.status !== 'cancelled') {
+        const dayMatch = last7Days.find(d => d.dateStr === dateStr);
+        if (dayMatch) {
+          dayMatch.totalFcfa += Number(o.total_fcfa || 0);
+        }
+      }
+
+      if (isToday && o.status !== 'cancelled') {
         revenueTodayFcfa += Number(o.total_fcfa || 0);
         ordersToday++;
+
+        // Payment method stats
+        if (o.payment_method === 'cash') {
+          cashCount++;
+          cashVolume += Number(o.total_fcfa || 0);
+        } else {
+          momoCount++;
+          momoVolume += Number(o.total_fcfa || 0);
+        }
+
+        // Order type stats
+        if (o.order_type === 'dine_in') {
+          dineInCount++;
+        } else if (o.order_type === 'delivery') {
+          deliveryCount++;
+        } else {
+          takeoutCount++;
+        }
       }
+
       if (['pending', 'confirmed', 'in_kitchen', 'ready', 'out_for_delivery'].includes(o.status)) {
         activeOrders++;
       }
     });
+
+    const revenueSeries = last7Days.map(d => ({
+      day: d.label,
+      totalFcfa: d.totalFcfa
+    }));
 
     const avgTicketFcfa = ordersToday > 0 ? Math.round(revenueTodayFcfa / ordersToday) : 0;
 
@@ -729,6 +782,18 @@ app.post("/api/actions/:actionRef", async (c) => {
       [resId]
     );
 
+    const topItemsRes = await pool.query(
+      `SELECT mi.name, SUM(oi.quantity)::int as quantity_sold, SUM(oi.subtotal_fcfa)::int as total_revenue
+       FROM order_items oi
+       JOIN menu_items mi ON oi.menu_item_id = mi.id
+       JOIN orders o ON oi.order_id = o.id
+       WHERE o.restaurant_id = $1::uuid AND o.status != 'cancelled'
+       GROUP BY mi.id, mi.name
+       ORDER BY quantity_sold DESC
+       LIMIT 5`,
+      [resId]
+    );
+
     return c.json({
       revenueTodayFcfa,
       ordersToday,
@@ -737,7 +802,19 @@ app.post("/api/actions/:actionRef", async (c) => {
       menuCount: menuCountRes.rows[0]?.count || 0,
       tableCount: tableCountRes.rows[0]?.count || 0,
       occupiedTables: tableCountRes.rows[0]?.occupied || 0,
-      revenueSeries: []
+      revenueSeries,
+      paymentMethodBreakdown: {
+        cash: cashCount,
+        momo: momoCount,
+        cashVolume,
+        momoVolume
+      },
+      orderTypeBreakdown: {
+        dine_in: dineInCount,
+        delivery: deliveryCount,
+        takeout: takeoutCount
+      },
+      topItems: topItemsRes.rows
     });
   }
 
@@ -861,16 +938,7 @@ app.post("/api/actions/:actionRef", async (c) => {
   }
 
   if (actionRef === "tables.cycleStatus") {
-    const body = await c.req.json<{ tableId?: string }>();
-    if (!body.tableId) return c.json({ error: "Table ID requis" }, 400);
-    const current = await pool.query(`SELECT status FROM restaurant_tables WHERE id = $1::uuid`, [body.tableId]);
-    if (current.rows.length === 0) return c.json({});
-    const nextStatus = current.rows[0].status === 'free' ? 'occupied' : current.rows[0].status === 'occupied' ? 'reserved' : 'free';
-    const result = await pool.query(
-      `UPDATE restaurant_tables SET status = $1 WHERE id = $2::uuid RETURNING id, status`,
-      [nextStatus, body.tableId]
-    );
-    return c.json(result.rows[0]);
+    return c.json({ error: "La modification manuelle de l'état des tables est désactivée. L'état change de 'libre' à 'occupé' lors d'une commande QR code, et revient à 'libre' après paiement." }, 400);
   }
 
   if (actionRef === "tables.remove") {
@@ -914,15 +982,70 @@ app.post("/api/actions/:actionRef", async (c) => {
     return c.json(result.rows[0] || null);
   }
 
-  if (actionRef === "orders.listRecent" || actionRef === "orders.activeWithItems") {
+  if (actionRef === "orders.listRecent") {
     const body = await c.req.json<{ restaurantId?: string; limit?: number }>();
     if (!body.restaurantId) return c.json([]);
     const limit = body.limit || 50;
     const result = await pool.query(
-      `SELECT id, order_type, status, subtotal_fcfa, total_fcfa, payment_method, payment_status, customer_name, created_at
+      `SELECT id, order_type, status, subtotal_fcfa, total_fcfa, payment_method, payment_status, customer_name, created_at,
+              'CMD-' || UPPER(SUBSTRING(id::text, 1, 4)) AS order_number
        FROM orders
        WHERE restaurant_id = $1::uuid
        ORDER BY created_at DESC
+       LIMIT $2`,
+      [body.restaurantId, limit]
+    );
+    return c.json(result.rows);
+  }
+
+  if (actionRef === "orders.activeWithItems") {
+    const body = await c.req.json<{ restaurantId?: string; limit?: number }>();
+    if (!body.restaurantId) return c.json([]);
+    const limit = body.limit || 50;
+    const result = await pool.query(
+      `SELECT 
+        o.id, 
+        'CMD-' || UPPER(SUBSTRING(o.id::text, 1, 4)) AS order_number,
+        o.order_type, 
+        o.status, 
+        o.subtotal_fcfa, 
+        o.total_fcfa, 
+        o.payment_method, 
+        o.payment_status, 
+        o.customer_name, 
+        o.delivery_address,
+        o.created_at,
+        o.table_id,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', oi.id,
+              'quantity', oi.quantity,
+              'item_name', mi.name,
+              'menu_item_id', oi.menu_item_id,
+              'price_fcfa', mi.price_fcfa,
+              'notes', NULL
+            )
+          ) FILTER (WHERE oi.id IS NOT NULL),
+          '[]'::json
+        ) AS items
+       FROM orders o
+       LEFT JOIN order_items oi ON o.id = oi.order_id
+       LEFT JOIN menu_items mi ON oi.menu_item_id = mi.id
+       WHERE o.restaurant_id = $1::uuid
+       GROUP BY 
+        o.id, 
+        o.order_type, 
+        o.status, 
+        o.subtotal_fcfa, 
+        o.total_fcfa, 
+        o.payment_method, 
+        o.payment_status, 
+        o.customer_name, 
+        o.delivery_address,
+        o.created_at,
+        o.table_id
+       ORDER BY o.created_at DESC
        LIMIT $2`,
       [body.restaurantId, limit]
     );
@@ -999,7 +1122,8 @@ app.post("/api/actions/:actionRef", async (c) => {
     const orderRes = await pool.query(
       `INSERT INTO orders (restaurant_id, order_type, table_id, customer_name, subtotal_fcfa, total_fcfa, payment_method, status)
        VALUES ($1::uuid, $2::order_type, $3, $4, $5, $5, $6::payment_method, 'pending')
-       RETURNING id, order_type, status, total_fcfa, payment_method, payment_status, customer_name, created_at`,
+       RETURNING id, order_type, status, total_fcfa, payment_method, payment_status, customer_name, created_at,
+                 'CMD-' || UPPER(SUBSTRING(id::text, 1, 4)) AS order_number`,
       [
         restaurantId,
         body.orderType || (tableId ? 'dine_in' : 'delivery'),
@@ -1011,6 +1135,13 @@ app.post("/api/actions/:actionRef", async (c) => {
     );
 
     const order = orderRes.rows[0];
+
+    if (tableId && (actionRef === "orders.createByQr" || body.tableToken)) {
+      await pool.query(
+        `UPDATE restaurant_tables SET status = 'occupied' WHERE id = $1::uuid`,
+        [tableId]
+      );
+    }
 
     for (const item of resolvedItems) {
       await pool.query(
@@ -1036,10 +1167,41 @@ app.post("/api/actions/:actionRef", async (c) => {
   if (actionRef === "orders.markPaid") {
     const body = await c.req.json<{ orderId?: string }>();
     if (!body.orderId) return c.json({ error: "ID requis" }, 400);
+
+    const orderInfo = await pool.query(
+      `SELECT table_id FROM orders WHERE id = $1::uuid`,
+      [body.orderId]
+    );
+    const tableId = orderInfo.rows[0]?.table_id;
+
     const result = await pool.query(
       `UPDATE orders SET payment_status = 'paid', updated_at = NOW() WHERE id = $1::uuid RETURNING id, payment_status`,
       [body.orderId]
     );
+
+    if (tableId) {
+      await pool.query(
+        `UPDATE restaurant_tables SET status = 'free' WHERE id = $1::uuid`,
+        [tableId]
+      );
+    }
+
+    return c.json(result.rows[0]);
+  }
+
+  if (actionRef === "orders.get") {
+    const body = await c.req.json<{ orderId?: string }>();
+    if (!body.orderId) return c.json({ error: "ID requis" }, 400);
+    const result = await pool.query(
+      `SELECT id, order_type, status, subtotal_fcfa, total_fcfa, payment_method, payment_status, customer_name, created_at,
+              'CMD-' || UPPER(SUBSTRING(id::text, 1, 4)) AS order_number
+       FROM orders
+       WHERE id = $1::uuid`,
+      [body.orderId]
+    );
+    if (result.rows.length === 0) {
+      return c.json({ error: "Commande introuvable" }, 404);
+    }
     return c.json(result.rows[0]);
   }
 
