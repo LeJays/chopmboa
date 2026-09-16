@@ -36,22 +36,25 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  BarChart3,
   Check,
   ChefHat,
   ClipboardList,
   Loader2,
+  Pencil,
   Plus,
   QrCode,
   Settings,
   Sparkles,
   Store,
   TrendingUp,
+  UtensilsCrossed,
   Wallet,
   Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import {
   PLANS,
@@ -83,6 +86,7 @@ import logo from "@/assets/logo.svg";
 import {
   CreateRestaurantDialog,
   CreateItemDialog,
+  EditItemDialog,
   CreateTableDialog,
   CreateCategoryDialog,
   CreateOrderDialog,
@@ -119,9 +123,12 @@ type PlanInfo = {
 export default function Dashboard() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const paramRestaurantId = searchParams.get("restaurantId");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState("overview");
   const [newItemOpen, setNewItemOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<UIMenuItem | null>(null);
   const [newTableOpen, setNewTableOpen] = useState(false);
   const [newRestaurantOpen, setNewRestaurantOpen] = useState(false);
   const [newCategoryOpen, setNewCategoryOpen] = useState(false);
@@ -224,6 +231,8 @@ export default function Dashboard() {
   // Connexion par rôle : un employé (caisse, cuisine, salle, livraison) qui
   // atteint /dashboard est renvoyé vers son espace de travail.
   const { context: staffContext } = useStaffContext();
+  const isOwner = staffContext?.role === "owner" || (user as any)?.role === "owner";
+
   useEffect(() => {
     if (
       staffContext &&
@@ -236,10 +245,12 @@ export default function Dashboard() {
   }, [staffContext, navigate]);
 
   useEffect(() => {
-    if (restaurants && restaurants.length > 0 && !selectedId) {
+    if (paramRestaurantId && restaurants && restaurants.some((r) => r.id === paramRestaurantId)) {
+      setSelectedId(paramRestaurantId);
+    } else if (restaurants && restaurants.length > 0 && !selectedId) {
       setSelectedId(restaurants[0].id);
     }
-  }, [restaurants, selectedId]);
+  }, [restaurants, selectedId, paramRestaurantId]);
 
   useEffect(() => {
     void (async () => {
@@ -326,7 +337,7 @@ export default function Dashboard() {
 
   const handleSignOut = async () => {
     await signOut();
-    navigate("/");
+    navigate("/auth?mode=signin");
   };
 
   const run = async (fn: () => Promise<unknown>, ok: string) => {
@@ -384,19 +395,29 @@ export default function Dashboard() {
             Bienvenue{user?.name ? ` ${user.name}` : ""} !
           </h1>
           <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
-            Créez votre premier restaurant pour démarrer, ou injectez les
-            données de démonstration camerounaises pour explorer ChopMboa.
+            {isOwner
+              ? "Créez votre premier restaurant pour démarrer, ou injectez les données de démonstration camerounaises pour explorer ChopMboa."
+              : "Bienvenue sur ChopMboa. Seul le propriétaire peut créer des restaurants. Veuillez patienter pendant qu'un établissement vous est attribué."}
           </p>
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-            <Button onClick={() => setNewRestaurantOpen(true)}>
-              <Plus className="size-4" />
-              Créer mon restaurant
-            </Button>
-            <Button variant="outline" onClick={() => setConfirmSeedOpen(true)}>
-              <Sparkles className="size-4" />
-              Charger la démo
-            </Button>
-          </div>
+          {isOwner ? (
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <Button onClick={() => setNewRestaurantOpen(true)}>
+                <Plus className="size-4" />
+                Créer mon restaurant
+              </Button>
+              <Button variant="outline" onClick={() => setConfirmSeedOpen(true)}>
+                <Sparkles className="size-4" />
+                Charger la démo
+              </Button>
+            </div>
+          ) : (
+            <div className="mt-8 max-w-md rounded-xl border border-border/80 bg-muted/30 p-4 text-sm text-muted-foreground">
+              <p className="font-semibold text-foreground">Accès restreint aux gérants</p>
+              <p className="mt-1">
+                La création d'établissement est une prérogative exclusive du propriétaire. Si un établissement vous a été assigné, actualisez la page ou contactez l'administrateur.
+              </p>
+            </div>
+          )}
 
           <Card className="mt-12 w-full text-left shadow-none">
             <CardHeader>
@@ -416,6 +437,10 @@ export default function Dashboard() {
           open={newRestaurantOpen}
           onOpenChange={setNewRestaurantOpen}
           onCreate={async (data) => {
+            if (!isOwner) {
+              toast.error("Seul le propriétaire a le droit de créer un restaurant.");
+              return;
+            }
             try {
               await createRestaurant(data);
               toast.success("Restaurant créé !");
@@ -501,12 +526,46 @@ export default function Dashboard() {
                   </DropdownMenuItem>
                 ))}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => setNewRestaurantOpen(true)}>
-                  <Plus className="mr-2 size-4" />
-                  Nouveau restaurant
+                <DropdownMenuItem onClick={() => navigate(activeId ? `/settings?restaurantId=${activeId}` : "/settings")}>
+                  <Settings className="mr-2 size-4 text-primary" />
+                  Paramètres de l'établissement
                 </DropdownMenuItem>
+                {isOwner && (
+                  <>
+                    <DropdownMenuItem onClick={() => navigate("/reports")}>
+                      <BarChart3 className="mr-2 size-4 text-primary" />
+                      Rapports comparatifs
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setNewRestaurantOpen(true)}>
+                      <Plus className="mr-2 size-4" />
+                      Nouveau restaurant
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate(activeId ? `/settings?restaurantId=${activeId}` : "/settings")}
+              className="gap-2 hidden sm:inline-flex text-xs"
+            >
+              <Settings className="size-4 text-primary" />
+              <span>Paramètres</span>
+            </Button>
+
+            {isOwner && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate("/reports")}
+                className="gap-2 hidden md:inline-flex text-xs"
+              >
+                <BarChart3 className="size-4 text-primary" />
+                <span>Rapports</span>
+              </Button>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {planInfo && (
@@ -576,6 +635,62 @@ export default function Dashboard() {
             </p>
           </div>
         )}
+
+        {/* Espaces de travail opérationnels (Accès rapide propriétaire) */}
+        <div className="mt-6 p-4 rounded-2xl border border-border bg-card shadow-2xs">
+          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-3">
+            Accès rapide aux espaces opérationnels
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+            <Button
+              variant="outline"
+              className="h-14 justify-start gap-3 hover:border-primary hover:bg-primary/5 transition-all w-full cursor-pointer"
+              onClick={() => navigate("/pos")}
+            >
+              <span className="text-xl">💰</span>
+              <div className="text-left min-w-0">
+                <p className="text-xs font-extrabold leading-tight">Caisse / POS</p>
+                <p className="text-[10px] text-muted-foreground truncate leading-normal">Prise de commandes & encaissement</p>
+              </div>
+            </Button>
+
+            <Button
+              variant="outline"
+              className="h-14 justify-start gap-3 hover:border-primary hover:bg-primary/5 transition-all w-full cursor-pointer"
+              onClick={() => navigate("/kitchen")}
+            >
+              <span className="text-xl">🍳</span>
+              <div className="text-left min-w-0">
+                <p className="text-xs font-extrabold leading-tight">Cuisine / KDS</p>
+                <p className="text-[10px] text-muted-foreground truncate leading-normal">Écran de préparation en cuisine</p>
+              </div>
+            </Button>
+
+            <Button
+              variant="outline"
+              className="h-14 justify-start gap-3 hover:border-primary hover:bg-primary/5 transition-all w-full cursor-pointer"
+              onClick={() => navigate("/waiter")}
+            >
+              <span className="text-xl">🏃‍♂️</span>
+              <div className="text-left min-w-0">
+                <p className="text-xs font-extrabold leading-tight">Service de Table</p>
+                <p className="text-[10px] text-muted-foreground truncate leading-normal">Serveurs & commandes en salle</p>
+              </div>
+            </Button>
+
+            <Button
+              variant="outline"
+              className="h-14 justify-start gap-3 hover:border-primary hover:bg-primary/5 transition-all w-full cursor-pointer"
+              onClick={() => navigate("/deliveries")}
+            >
+              <span className="text-xl">🛵</span>
+              <div className="text-left min-w-0">
+                <p className="text-xs font-extrabold leading-tight">Livreurs / Courses</p>
+                <p className="text-[10px] text-muted-foreground truncate leading-normal">Affectation & suivi des courses</p>
+              </div>
+            </Button>
+          </div>
+        </div>
 
         <Tabs value={tab} onValueChange={setTab} className="mt-6">
           <TabsList className="w-full justify-start overflow-x-auto sm:w-auto">
@@ -896,17 +1011,32 @@ export default function Dashboard() {
                     {menuItems.map((item) => (
                       <TableRow key={item.id}>
                         <TableCell>
-                          <p className="font-medium">
-                            {item.name}
-                            {!item.isAvailable && (
-                              <Badge variant="outline" className="ml-2">
-                                Épuisé
-                              </Badge>
-                            )}
-                          </p>
-                          <p className="max-w-72 truncate text-xs text-muted-foreground">
-                            {item.description ?? ""}
-                          </p>
+                          <div className="flex items-center gap-3">
+                            <div className="size-11 rounded-lg border border-border/70 bg-muted/40 overflow-hidden flex items-center justify-center shrink-0">
+                              {item.imageUrl ? (
+                                <img
+                                  src={item.imageUrl}
+                                  alt={item.name}
+                                  className="size-full object-cover"
+                                />
+                              ) : (
+                                <UtensilsCrossed className="size-5 text-muted-foreground/40" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-medium truncate flex items-center gap-1.5">
+                                {item.name}
+                                {!item.isAvailable && (
+                                  <Badge variant="outline" className="text-[10px] py-0">
+                                    Épuisé
+                                  </Badge>
+                                )}
+                              </p>
+                              <p className="max-w-72 truncate text-xs text-muted-foreground">
+                                {item.description ?? ""}
+                              </p>
+                            </div>
+                          </div>
                         </TableCell>
                         <TableCell>
                           {categories.find((c) => c.id === item.categoryId)?.name ?? "—"}
@@ -915,10 +1045,20 @@ export default function Dashboard() {
                           {formatFcfa(item.priceFcfa)}
                         </TableCell>
                         <TableCell>
-                          <div className="flex justify-end gap-2">
+                          <div className="flex justify-end items-center gap-1.5">
                             <Button
                               size="sm"
                               variant="outline"
+                              className="h-8 text-xs gap-1"
+                              onClick={() => setEditingItem(item)}
+                            >
+                              <Pencil className="size-3" />
+                              <span className="hidden sm:inline">Éditer</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 text-xs"
                               onClick={() =>
                                 run(
                                   () =>
@@ -935,7 +1075,7 @@ export default function Dashboard() {
                             <Button
                               size="sm"
                               variant="ghost"
-                              className="text-destructive hover:text-destructive"
+                              className="h-8 text-xs text-destructive hover:text-destructive"
                               onClick={() =>
                                 run(
                                   () => deleteItem({ itemId: item.id }),
@@ -1174,6 +1314,10 @@ export default function Dashboard() {
         open={newRestaurantOpen}
         onOpenChange={setNewRestaurantOpen}
         onCreate={async (data) => {
+          if (!isOwner) {
+            toast.error("Seul le propriétaire a le droit de créer un restaurant.");
+            return;
+          }
           try {
             await createRestaurant(data);
             toast.success("Restaurant créé !");
@@ -1200,12 +1344,40 @@ export default function Dashboard() {
               priceFcfa: data.priceFcfa,
               categoryId: data.categoryId || undefined,
               preparationTimeMin: data.preparationTimeMin,
+              imageUrl: data.imageUrl,
             });
             toast.success("Plat ajouté au menu !");
             setNewItemOpen(false);
             refreshAll();
           } catch (err) {
             toast.error(err instanceof Error ? err.message : "Échec de l'ajout.");
+          }
+        }}
+      />
+      <EditItemDialog
+        open={!!editingItem}
+        onOpenChange={(open) => {
+          if (!open) setEditingItem(null);
+        }}
+        item={editingItem}
+        categories={categories}
+        onSave={async (data) => {
+          try {
+            await updateItem({
+              itemId: data.id,
+              name: data.name,
+              description: data.description,
+              priceFcfa: data.priceFcfa,
+              categoryId: data.categoryId || null,
+              imageUrl: data.imageUrl,
+            });
+            toast.success("Plat mis à jour !");
+            setEditingItem(null);
+            refreshAll();
+          } catch (err) {
+            toast.error(
+              err instanceof Error ? err.message : "Échec de la mise à jour.",
+            );
           }
         }}
       />

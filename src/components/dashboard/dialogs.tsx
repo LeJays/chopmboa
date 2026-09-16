@@ -16,8 +16,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2 } from "lucide-react";
-import { useState } from "react";
+import { Loader2, Image as ImageIcon, Upload, X, Sparkles, Check, Trash2 } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { fileToDataUrl, DISH_IMAGE_PRESETS } from "@/lib/imageUtils";
 
 export const STAFF_ROLES = [
   { value: "manager", label: "Gérant" },
@@ -78,8 +79,7 @@ export function CreateRestaurantDialog({
         <DialogHeader>
           <DialogTitle>Nouveau restaurant</DialogTitle>
           <DialogDescription>
-            Multi-restaurants selon votre plan : FREE 1, PRO 3, BUSINESS
-            illimité.
+            Action réservée au propriétaire. Multi-restaurants selon votre plan : FREE 1, PRO 3, BUSINESS illimité.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -151,6 +151,7 @@ export interface ItemDraft {
   priceFcfa: number;
   categoryId?: string;
   preparationTimeMin?: number;
+  imageUrl?: string;
 }
 
 export function CreateItemDialog({
@@ -169,7 +170,35 @@ export function CreateItemDialog({
   const [price, setPrice] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [prep, setPrep] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageMode, setImageMode] = useState<"file" | "url" | "presets">("file");
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
   const [pending, setPending] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const resetForm = () => {
+    setName("");
+    setDescription("");
+    setPrice("");
+    setCategoryId("");
+    setPrep("");
+    setImageUrl("");
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsProcessingImage(true);
+      const dataUrl = await fileToDataUrl(file, 800, 800);
+      setImageUrl(dataUrl);
+    } catch (err) {
+      console.error("Image read error:", err);
+    } finally {
+      setIsProcessingImage(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
 
   const submit = async () => {
     const priceNum = Number(price.replace(/\s/g, ""));
@@ -183,36 +212,199 @@ export function CreateItemDialog({
         priceFcfa: priceNum,
         categoryId: categoryId || undefined,
         preparationTimeMin: prep ? Number(prep) : undefined,
+        imageUrl: imageUrl.trim() || undefined,
       });
-      setName("");
-      setDescription("");
-      setPrice("");
-      setCategoryId("");
-      setPrep("");
+      resetForm();
     } finally {
       setPending(false);
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) resetForm();
+        onOpenChange(v);
+      }}
+    >
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Ajouter un plat</DialogTitle>
+          <DialogTitle>Ajouter un plat au menu</DialogTitle>
           <DialogDescription>
-            Le plat est immédiatement disponible à la vente.
+            Renseignez les détails du plat, son prix et une photo pour le rendre attrayant aux clients.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
+
+        <div className="space-y-4 pt-1">
+          {/* Photo du plat */}
+          <div className="space-y-2 rounded-xl border border-border/80 bg-muted/20 p-3.5">
+            <div className="flex items-center justify-between">
+              <Label className="text-sm font-semibold flex items-center gap-1.5">
+                <ImageIcon className="size-4 text-primary" />
+                Photo du plat
+              </Label>
+              {imageUrl && (
+                <button
+                  type="button"
+                  onClick={() => setImageUrl("")}
+                  className="text-xs text-destructive hover:underline flex items-center gap-1"
+                >
+                  <Trash2 className="size-3" /> Supprimer
+                </button>
+              )}
+            </div>
+
+            {imageUrl ? (
+              <div className="relative group rounded-lg overflow-hidden border border-border bg-black/5 aspect-video sm:aspect-2/1 flex items-center justify-center">
+                <img
+                  src={imageUrl}
+                  alt="Aperçu du plat"
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-8 text-xs bg-white text-black hover:bg-neutral-100"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Changer de photo
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => setImageUrl("")}
+                  >
+                    Retirer
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div className="flex rounded-lg border border-border bg-background p-0.5 text-xs font-medium mb-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setImageMode("file")}
+                    className={`flex-1 py-1 rounded-md transition-colors ${
+                      imageMode === "file"
+                        ? "bg-primary text-primary-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Importer fichier
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImageMode("presets")}
+                    className={`flex-1 py-1 rounded-md transition-colors ${
+                      imageMode === "presets"
+                        ? "bg-primary text-primary-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Suggestions locales
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImageMode("url")}
+                    className={`flex-1 py-1 rounded-md transition-colors ${
+                      imageMode === "url"
+                        ? "bg-primary text-primary-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Lien web (URL)
+                  </button>
+                </div>
+
+                {imageMode === "file" && (
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border/80 bg-background/80 hover:bg-muted/40 transition-colors cursor-pointer p-4 text-center"
+                  >
+                    {isProcessingImage ? (
+                      <Loader2 className="size-6 animate-spin text-primary" />
+                    ) : (
+                      <>
+                        <Upload className="size-6 text-muted-foreground mb-1.5" />
+                        <p className="text-xs font-medium text-foreground">
+                          Cliquez pour choisir une photo ou glissez-déposez
+                        </p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          PNG, JPG, WebP (compressée automatiquement)
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {imageMode === "presets" && (
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] text-muted-foreground">
+                      Cliquez sur une suggestion de spécialité camerounaise :
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {DISH_IMAGE_PRESETS.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => setImageUrl(preset.url)}
+                          className="group text-left rounded-lg border border-border/60 hover:border-primary overflow-hidden bg-background p-1 text-[11px] transition-all hover:shadow-xs"
+                        >
+                          <img
+                            src={preset.url}
+                            alt={preset.name}
+                            className="w-full h-14 object-cover rounded-md mb-1 group-hover:scale-105 transition-transform"
+                          />
+                          <p className="font-medium truncate text-foreground px-0.5">
+                            {preset.name}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {imageMode === "url" && (
+                  <div className="space-y-1.5">
+                    <Input
+                      type="url"
+                      placeholder="https://images.unsplash.com/.../plat.jpg"
+                      value={imageUrl}
+                      onChange={(e) => setImageUrl(e.target.value)}
+                      className="text-xs"
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      Collez l'URL directe d'une photo hébergée sur le web.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+          </div>
+
           <div className="space-y-2">
             <Label htmlFor="i-name">Nom du plat *</Label>
             <Input
               id="i-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Poulet braisé"
+              placeholder="ex: Poulet DG braisé aux plantains"
             />
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <Label htmlFor="i-price">Prix (FCFA) *</Label>
@@ -235,11 +427,12 @@ export function CreateItemDialog({
               />
             </div>
           </div>
+
           <div className="space-y-2">
             <Label htmlFor="i-cat">Catégorie</Label>
             <select
               id="i-cat"
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               value={categoryId}
               onChange={(e) => setCategoryId(e.target.value)}
             >
@@ -251,23 +444,337 @@ export function CreateItemDialog({
               ))}
             </select>
           </div>
+
           <div className="space-y-2">
             <Label htmlFor="i-desc">Description</Label>
             <Input
               id="i-desc"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Servi avec plantains mûrs"
+              placeholder="ex: Cuisiné avec légumes frais, poivrons et plantains mûrs"
             />
           </div>
         </div>
-        <DialogFooter>
+
+        <DialogFooter className="pt-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Annuler
           </Button>
           <Button onClick={submit} disabled={pending || !name.trim()}>
             {pending && <Loader2 className="mr-2 size-4 animate-spin" />}
-            Ajouter
+            Ajouter au menu
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function EditItemDialog({
+  open,
+  onOpenChange,
+  item,
+  categories,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  item: {
+    id: string;
+    name: string;
+    description: string | null;
+    priceFcfa: number;
+    categoryId: string | null;
+    imageUrl?: string | null;
+  } | null;
+  categories: { id: string; name: string }[];
+  onSave: (data: {
+    id: string;
+    name: string;
+    description?: string;
+    priceFcfa: number;
+    categoryId?: string;
+    imageUrl?: string | null;
+  }) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [price, setPrice] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageMode, setImageMode] = useState<"file" | "url" | "presets">("file");
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
+  const [pending, setPending] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (item) {
+      setName(item.name || "");
+      setDescription(item.description || "");
+      setPrice(String(item.priceFcfa || ""));
+      setCategoryId(item.categoryId || "");
+      setImageUrl(item.imageUrl || "");
+    }
+  }, [item]);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsProcessingImage(true);
+      const dataUrl = await fileToDataUrl(file, 800, 800);
+      setImageUrl(dataUrl);
+    } catch (err) {
+      console.error("Image read error:", err);
+    } finally {
+      setIsProcessingImage(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const submit = async () => {
+    if (!item) return;
+    const priceNum = Number(price.replace(/\s/g, ""));
+    if (!name.trim() || !Number.isFinite(priceNum) || priceNum <= 0 || pending)
+      return;
+    setPending(true);
+    try {
+      await onSave({
+        id: item.id,
+        name: name.trim(),
+        description: description.trim() || undefined,
+        priceFcfa: priceNum,
+        categoryId: categoryId || undefined,
+        imageUrl: imageUrl.trim() || null,
+      });
+      onOpenChange(false);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Modifier le plat</DialogTitle>
+          <DialogDescription>
+            Modifiez les informations, le tarif et la photo de ce plat.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 pt-1">
+          {/* Photo du plat */}
+          <div className="space-y-2 rounded-xl border border-border/80 bg-muted/20 p-3.5">
+            <div className="flex items-center justify-between">
+              <Label className="text-sm font-semibold flex items-center gap-1.5">
+                <ImageIcon className="size-4 text-primary" />
+                Photo du plat
+              </Label>
+              {imageUrl && (
+                <button
+                  type="button"
+                  onClick={() => setImageUrl("")}
+                  className="text-xs text-destructive hover:underline flex items-center gap-1"
+                >
+                  <Trash2 className="size-3" /> Supprimer
+                </button>
+              )}
+            </div>
+
+            {imageUrl ? (
+              <div className="relative group rounded-lg overflow-hidden border border-border bg-black/5 aspect-video sm:aspect-2/1 flex items-center justify-center">
+                <img
+                  src={imageUrl}
+                  alt="Aperçu du plat"
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-8 text-xs bg-white text-black hover:bg-neutral-100"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Changer de photo
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => setImageUrl("")}
+                  >
+                    Retirer
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div className="flex rounded-lg border border-border bg-background p-0.5 text-xs font-medium mb-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setImageMode("file")}
+                    className={`flex-1 py-1 rounded-md transition-colors ${
+                      imageMode === "file"
+                        ? "bg-primary text-primary-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Importer fichier
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImageMode("presets")}
+                    className={`flex-1 py-1 rounded-md transition-colors ${
+                      imageMode === "presets"
+                        ? "bg-primary text-primary-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Suggestions locales
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImageMode("url")}
+                    className={`flex-1 py-1 rounded-md transition-colors ${
+                      imageMode === "url"
+                        ? "bg-primary text-primary-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Lien web (URL)
+                  </button>
+                </div>
+
+                {imageMode === "file" && (
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border/80 bg-background/80 hover:bg-muted/40 transition-colors cursor-pointer p-4 text-center"
+                  >
+                    {isProcessingImage ? (
+                      <Loader2 className="size-6 animate-spin text-primary" />
+                    ) : (
+                      <>
+                        <Upload className="size-6 text-muted-foreground mb-1.5" />
+                        <p className="text-xs font-medium text-foreground">
+                          Cliquez pour choisir une photo ou glissez-déposez
+                        </p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          PNG, JPG, WebP
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {imageMode === "presets" && (
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] text-muted-foreground">
+                      Cliquez sur une suggestion :
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {DISH_IMAGE_PRESETS.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => setImageUrl(preset.url)}
+                          className="group text-left rounded-lg border border-border/60 hover:border-primary overflow-hidden bg-background p-1 text-[11px] transition-all hover:shadow-xs"
+                        >
+                          <img
+                            src={preset.url}
+                            alt={preset.name}
+                            className="w-full h-14 object-cover rounded-md mb-1 group-hover:scale-105 transition-transform"
+                          />
+                          <p className="font-medium truncate text-foreground px-0.5">
+                            {preset.name}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {imageMode === "url" && (
+                  <div className="space-y-1.5">
+                    <Input
+                      type="url"
+                      placeholder="https://..."
+                      value={imageUrl}
+                      onChange={(e) => setImageUrl(e.target.value)}
+                      className="text-xs"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="edit-name">Nom du plat *</Label>
+            <Input
+              id="edit-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Nom du plat"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="edit-price">Prix (FCFA) *</Label>
+            <Input
+              id="edit-price"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              inputMode="numeric"
+              placeholder="Prix en FCFA"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="edit-cat">Catégorie</Label>
+            <select
+              id="edit-cat"
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={categoryId}
+              onChange={(e) => setCategoryId(e.target.value)}
+            >
+              <option value="">Sans catégorie</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="edit-desc">Description</Label>
+            <Input
+              id="edit-desc"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Description"
+            />
+          </div>
+        </div>
+
+        <DialogFooter className="pt-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Annuler
+          </Button>
+          <Button onClick={submit} disabled={pending || !name.trim()}>
+            {pending && <Loader2 className="mr-2 size-4 animate-spin" />}
+            Enregistrer les modifications
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -55,14 +55,22 @@ function passwordErrorMessage(message: string, mode: "signup" | "signin") {
 
 /** Split-screen branded inscription / connexion — email + mot de passe. */
 function Auth({ redirectAfterAuth }: AuthProps = {}) {
-  const { isLoading: authLoading, isAuthenticated, signIn } = useAuth();
+  const { isLoading: authLoading, isAuthenticated, user, signIn, signOut } = useAuth();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const redirect = resolveRedirectAfterAuth(
     searchParams.get("returnTo"),
     redirectAfterAuth,
   );
-  const [mode, setMode] = useState<"signup" | "signin">("signup");
+  const initialMode = searchParams.get("mode") === "signup" ? "signup" : "signin";
+  const [mode, setMode] = useState<"signup" | "signin">(initialMode);
+
+  useEffect(() => {
+    const paramMode = searchParams.get("mode");
+    if (paramMode === "signup" || paramMode === "signin") {
+      setMode(paramMode);
+    }
+  }, [searchParams]);
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
@@ -70,15 +78,10 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Évite que l'effet ci-dessous n'écrase la redirection par rôle du submit.
-  const handledRef = useRef(false);
 
   /**
    * Redirection vers l'espace de travail du rôle (owner → dashboard,
-   * kitchen → KDS, cashier → caisse…). Juste après `signIn`, le jeton de
-   * session peut mettre quelques centaines de millisecondes à s'attacher au
-   * client Convex : whoAmI renvoie alors null (requête anonyme). On réessaie
-   * donc brièvement avant de retomber sur le fallback.
+   * kitchen → KDS, cashier → caisse…).
    */
   const goToRoleHome = useCallback(
     async (explicitReturnTo: string | null) => {
@@ -90,15 +93,6 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     },
     [navigate, redirect],
   );
-
-  // Déjà connecté en arrivant sur /auth → rôle résolu puis redirection.
-  useEffect(() => {
-    if (authLoading || !isAuthenticated || isLoading || handledRef.current) {
-      return;
-    }
-    handledRef.current = true;
-    void goToRoleHome(searchParams.get("returnTo"));
-  }, [authLoading, isAuthenticated, isLoading, goToRoleHome, searchParams]);
 
   const validate = (): string | null => {
     if (mode === "signup" && fullName.trim().length < 2) {
@@ -141,7 +135,6 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
 
       // Connexion par rôle : chaque rôle arrive sur son espace de travail.
       // Un returnTo explicite dans l'URL reste prioritaire.
-      handledRef.current = true;
       await goToRoleHome(searchParams.get("returnTo"));
     } catch (err) {
       console.error("Password auth error:", err);
@@ -157,6 +150,14 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     setError(null);
     setPassword("");
     setConfirmPassword("");
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("mode", value);
+        return next;
+      },
+      { replace: true },
+    );
   };
 
   return (
@@ -265,6 +266,40 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                   </button>
                 ))}
               </div>
+              {isAuthenticated && user && (
+                <div className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-3 text-left">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-medium uppercase tracking-wider text-primary">
+                        Session active
+                      </p>
+                      <p className="truncate text-sm font-semibold text-foreground">
+                        {user.name || user.email}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <Button
+                        size="sm"
+                        type="button"
+                        onClick={() => void goToRoleHome(searchParams.get("returnTo"))}
+                      >
+                        Accéder
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        type="button"
+                        onClick={async () => {
+                          await signOut();
+                        }}
+                      >
+                        Déconnexion
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
             <form onSubmit={handleSubmit}>
               <CardContent className="space-y-4 pt-5">

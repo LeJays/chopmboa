@@ -15,18 +15,22 @@ import {
 import {
   Check,
   ChefHat,
+  Compass,
+  ExternalLink,
   Loader2,
   MapPin,
   Minus,
+  Navigation,
   Phone,
   Plus,
   Store,
+  UtensilsCrossed,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { toast } from "sonner";
 import { formatFcfa } from "@/lib/chopmboa";
-import { mapCategory, mapItem, type UIMenuItem } from "@/lib/neonMappers";
+import { mapCategory, mapItem, mapOrder, type UIMenuItem } from "@/lib/neonMappers";
 import logo from "@/assets/logo.svg";
 
 interface TableInfo {
@@ -37,6 +41,18 @@ interface TableInfo {
   restaurantDescription: string | null;
   restaurantAddress: string | null;
   restaurantPhone: string | null;
+  logoUrl?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  landmark?: string | null;
+  momoActive?: boolean;
+  momoNumber?: string | null;
+  momoName?: string | null;
+  omActive?: boolean;
+  omNumber?: string | null;
+  omName?: string | null;
+  cashActive?: boolean;
+  paymentInstructions?: string | null;
 }
 
 /** Public customer menu reached by scanning a table's QR code. */
@@ -56,8 +72,9 @@ export default function TableMenu() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<"cash" | "mobile_money">("cash");
   const [pending, setPending] = useState(false);
-  const [placed, setPlaced] = useState<{ orderNumber: string; totalFcfa: number } | null>(null);
+  const [placed, setPlaced] = useState<{ orderNumber: string; totalFcfa: number; paymentMethod?: string } | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -120,12 +137,18 @@ export default function TableMenu() {
         tableToken: token,
         customerName: name.trim(),
         customerPhone: phone.trim() || undefined,
+        paymentMethod,
         items: Object.entries(cart).map(([menuItemId, quantity]) => ({
           menuItemId,
           quantity,
         })),
-      })) as { orderNumber: string; totalFcfa: number };
-      setPlaced({ orderNumber: res.orderNumber, totalFcfa: res.totalFcfa });
+      })) as any;
+      const mapped = mapOrder(res);
+      setPlaced({
+        orderNumber: mapped.orderNumber,
+        totalFcfa: mapped.totalFcfa,
+        paymentMethod
+      });
       setCart({});
       setCheckoutOpen(false);
     } catch (err) {
@@ -168,17 +191,64 @@ export default function TableMenu() {
   /* --------------------------- success ------------------------------- */
   if (placed) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-background px-4 text-center">
-        <div className="flex size-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+      <main className="flex min-h-screen flex-col items-center justify-center bg-background px-4 max-w-sm mx-auto text-center py-12">
+        <div className="flex size-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 mx-auto">
           <Check className="size-8" />
         </div>
-        <h1 className="mt-6 text-2xl font-extrabold">Commande envoyée !</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {placed.orderNumber} · {formatFcfa(placed.totalFcfa)} — la cuisine
-          prépare votre commande. Suivez l'avancement auprès du personnel.
+        <h1 className="mt-6 text-2xl font-extrabold">Commande reçue !</h1>
+        
+        <div className="mt-4 p-4 rounded-2xl bg-muted/30 border border-border w-full text-left space-y-3">
+          <div className="flex items-center justify-between text-xs font-bold border-b border-border pb-2">
+            <span>N° Commande:</span>
+            <span className="text-primary">{placed.orderNumber}</span>
+          </div>
+          <div className="flex items-center justify-between text-xs font-bold border-b border-border pb-2">
+            <span>Montant total:</span>
+            <span className="text-base text-primary font-extrabold">{formatFcfa(placed.totalFcfa)}</span>
+          </div>
+          <div className="flex items-center justify-between text-xs font-bold">
+            <span>Mode choisi:</span>
+            <span className="text-muted-foreground">{placed.paymentMethod === "mobile_money" ? "📱 Mobile Money" : "💵 Espèces / Cash"}</span>
+          </div>
+
+          {placed.paymentMethod === "mobile_money" && (
+            <div className="mt-4 pt-3 border-t border-dashed border-border space-y-2.5">
+              <p className="text-[11px] font-bold text-orange-800">
+                👉 Veuillez effectuer le transfert maintenant :
+              </p>
+              
+              <div className="space-y-1.5 text-xs">
+                {info.momoActive && info.momoNumber && (
+                  <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200">
+                    <p className="font-bold text-amber-800 text-[11px]">MTN Mobile Money</p>
+                    <p className="font-extrabold text-foreground mt-0.5">N° : {info.momoNumber}</p>
+                    {info.momoName && <p className="text-[10px] text-muted-foreground">Nom : {info.momoName}</p>}
+                  </div>
+                )}
+                {info.omActive && info.omNumber && (
+                  <div className="p-2.5 rounded-xl bg-orange-50 border border-orange-200">
+                    <p className="font-bold text-orange-800 text-[11px]">Orange Money (OM)</p>
+                    <p className="font-extrabold text-foreground mt-0.5">N° : {info.omNumber}</p>
+                    {info.omName && <p className="text-[10px] text-muted-foreground">Nom : {info.omName}</p>}
+                  </div>
+                )}
+              </div>
+
+              {info.paymentInstructions && (
+                <div className="p-2 bg-muted/40 rounded-lg text-[10.5px] italic text-muted-foreground border border-border">
+                  {info.paymentInstructions}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <p className="mt-4 text-xs text-muted-foreground leading-relaxed px-2">
+          La cuisine prépare déjà votre commande. Veuillez présenter votre reçu de paiement ou numéro de commande au serveur ou livreur.
         </p>
-        <Button className="mt-8" variant="outline" onClick={() => setPlaced(null)}>
-          Commander autre chose
+        
+        <Button className="mt-8 w-full" variant="outline" onClick={() => setPlaced(null)}>
+          Retourner au menu
         </Button>
       </main>
     );
@@ -189,25 +259,45 @@ export default function TableMenu() {
     <main className="min-h-screen bg-background pb-32">
       <header className="border-b border-border/60 bg-gradient-to-b from-orange-950/40 to-transparent">
         <div className="mx-auto max-w-2xl px-4 py-8">
-          <div className="flex items-center gap-3">
-            <div className="flex size-12 items-center justify-center rounded-2xl bg-primary-muted text-primary">
-              <Store className="size-6" />
+          <div className="flex items-center gap-3.5">
+            <div className="size-16 rounded-2xl border border-border/80 bg-background overflow-hidden flex items-center justify-center shrink-0 shadow-xs">
+              {info.logoUrl ? (
+                <img
+                  src={info.logoUrl}
+                  alt={info.restaurantName}
+                  className="size-full object-cover"
+                />
+              ) : (
+                <div className="flex size-full items-center justify-center bg-primary-muted text-primary">
+                  <Store className="size-7" />
+                </div>
+              )}
             </div>
             <div>
               <h1 className="text-xl font-extrabold tracking-tight">
                 {info.restaurantName}
               </h1>
               <p className="text-sm text-muted-foreground">
-                Table {info.tableNumber} · Menu du jour
+                Table {info.tableNumber} · Menu interactif
               </p>
             </div>
           </div>
+
+          {info.landmark && (
+            <div className="mt-3.5 inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs text-foreground shadow-2xs">
+              <MapPin className="size-3.5 text-primary shrink-0" />
+              <span className="font-semibold text-primary">Repère d'accès :</span>
+              <span className="font-medium">{info.landmark}</span>
+            </div>
+          )}
+
           {info.restaurantDescription && (
-            <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
               {info.restaurantDescription}
             </p>
           )}
-          <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted-foreground">
+
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             {info.restaurantAddress && (
               <span className="inline-flex items-center gap-1.5">
                 <MapPin className="size-3.5" /> {info.restaurantAddress}
@@ -217,6 +307,18 @@ export default function TableMenu() {
               <span className="inline-flex items-center gap-1.5">
                 <Phone className="size-3.5" /> {info.restaurantPhone}
               </span>
+            )}
+            {info.latitude != null && info.longitude != null && (
+              <a
+                href={`https://www.google.com/maps?q=${info.latitude},${info.longitude}`}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="inline-flex items-center gap-1 text-primary hover:underline font-medium"
+              >
+                <Navigation className="size-3.5" />
+                Itinéraire GPS
+                <ExternalLink className="size-3" />
+              </a>
             )}
           </div>
         </div>
@@ -254,10 +356,23 @@ export default function TableMenu() {
               return (
                 <div
                   key={item.id}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-border/70 px-4 py-3"
+                  className="flex items-center gap-3.5 rounded-xl border border-border/70 bg-card p-3 shadow-2xs hover:border-border transition-colors"
                 >
+                  <div className="size-20 sm:size-24 rounded-xl border border-border/60 bg-muted/40 overflow-hidden flex items-center justify-center shrink-0 shadow-2xs">
+                    {item.imageUrl ? (
+                      <img
+                        src={item.imageUrl}
+                        alt={item.name}
+                        className="size-full object-cover"
+                      />
+                    ) : (
+                      <UtensilsCrossed className="size-7 text-muted-foreground/30" />
+                    )}
+                  </div>
                   <div className="min-w-0 flex-1">
-                    <p className="font-semibold">{item.name}</p>
+                    <p className="font-semibold text-sm sm:text-base text-foreground line-clamp-1">
+                      {item.name}
+                    </p>
                     {item.description && (
                       <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
                         {item.description}
@@ -267,7 +382,7 @@ export default function TableMenu() {
                       {formatFcfa(item.priceFcfa)}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <Button
                       variant="outline"
                       size="sm"
@@ -277,7 +392,7 @@ export default function TableMenu() {
                     >
                       <Minus className="size-3.5" />
                     </Button>
-                    <span className="w-6 text-center text-sm font-bold">
+                    <span className="w-5 text-center text-sm font-bold">
                       {qty}
                     </span>
                     <Button
@@ -343,6 +458,76 @@ export default function TableMenu() {
                 inputMode="tel"
                 placeholder="+237 6…"
               />
+            </div>
+
+            {/* Mode de paiement */}
+            <div className="space-y-2.5 pt-2 border-t border-border">
+              <Label className="text-xs font-semibold">Mode de règlement préféré</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {/* Cash option (Active by default or if configured) */}
+                {(info.cashActive !== false) && (
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod("cash")}
+                    className={`flex flex-col items-center justify-center p-3 rounded-xl border text-center transition-all ${
+                      paymentMethod === "cash"
+                        ? "border-primary bg-primary/5 text-primary ring-2 ring-primary/20"
+                        : "border-border hover:bg-muted/30 text-foreground"
+                    }`}
+                  >
+                    <span className="text-base">💵</span>
+                    <span className="text-[11px] font-bold mt-1">Espèces / Cash</span>
+                    <span className="text-[9px] text-muted-foreground">Paiement sur place</span>
+                  </button>
+                )}
+
+                {/* Mobile Money option (if active) */}
+                {(info.momoActive || info.omActive) && (
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod("mobile_money")}
+                    className={`flex flex-col items-center justify-center p-3 rounded-xl border text-center transition-all ${
+                      paymentMethod === "mobile_money"
+                        ? "border-orange-500 bg-orange-500/5 text-orange-700 ring-2 ring-orange-500/20"
+                        : "border-border hover:bg-muted/30 text-foreground"
+                    }`}
+                  >
+                    <span className="text-base">📱</span>
+                    <span className="text-[11px] font-bold mt-1">Mobile Money</span>
+                    <span className="text-[9px] text-muted-foreground">Transfert (MoMo, OM)</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Show Transfer payment instructions right here if selected */}
+              {paymentMethod === "mobile_money" && (
+                <div className="rounded-xl border border-orange-200 bg-orange-50/40 p-3 space-y-2 mt-2">
+                  <p className="text-[11px] font-bold text-orange-800 flex items-center gap-1.5">
+                    ℹ️ Comment procéder au paiement :
+                  </p>
+                  <div className="space-y-1.5 text-[10.5px] text-muted-foreground">
+                    {info.momoActive && info.momoNumber && (
+                      <div className="flex flex-col p-1.5 rounded bg-background border border-amber-200/50">
+                        <span className="font-semibold text-amber-700">MTN Mobile Money :</span>
+                        <span className="font-bold text-foreground mt-0.5">N° : {info.momoNumber}</span>
+                        {info.momoName && <span className="text-[9.5px]">Compte : <span className="font-medium text-foreground">{info.momoName}</span></span>}
+                      </div>
+                    )}
+                    {info.omActive && info.omNumber && (
+                      <div className="flex flex-col p-1.5 rounded bg-background border border-orange-200/50">
+                        <span className="font-semibold text-orange-700">Orange Money (OM) :</span>
+                        <span className="font-bold text-foreground mt-0.5">N° : {info.omNumber}</span>
+                        {info.omName && <span className="text-[9.5px]">Compte : <span className="font-medium text-foreground">{info.omName}</span></span>}
+                      </div>
+                    )}
+                    {info.paymentInstructions && (
+                      <p className="italic text-[10px] mt-1 border-t border-orange-100 pt-1">
+                        {info.paymentInstructions}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           <DialogFooter>

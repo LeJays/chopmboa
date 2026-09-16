@@ -31,8 +31,12 @@ export function useAuth() {
   }, []);
 
   const signOut = useCallback(async () => {
-    await apiClient.signOut();
-    setUser(null);
+    try {
+      await apiClient.signOut();
+    } finally {
+      setUser(null);
+      setTick((value) => value + 1);
+    }
   }, []);
 
   return {

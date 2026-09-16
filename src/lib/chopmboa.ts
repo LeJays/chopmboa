@@ -72,6 +72,9 @@ export function addDays(ts: number, days: number): number {
 
 /** 4 500 FCFA (narrow no-break space thousands separator). */
 export function formatFcfa(amount: number): string {
+  if (amount === undefined || amount === null || isNaN(amount)) {
+    return "0 FCFA";
+  }
   return `${amount.toLocaleString("fr-FR")} FCFA`;
 }
 

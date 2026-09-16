@@ -26,6 +26,10 @@ const DeliveriesPage = lazy(() =>
     default: m.DeliveriesPage,
   })),
 );
+const ReportsPage = lazy(() =>
+  import("./pages/Reports.tsx").then((m) => ({ default: m.Reports })),
+);
+const RestaurantSettingsPage = lazy(() => import("./pages/RestaurantSettings.tsx"));
 
 // Simple loading fallback for route transitions
 function RouteLoading() {
@@ -115,6 +119,30 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <Dashboard />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/reports"
+                element={
+                  <RequireAuth>
+                    <ReportsPage />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/settings"
+                element={
+                  <RequireAuth>
+                    <RestaurantSettingsPage />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/restaurant-settings"
+                element={
+                  <RequireAuth>
+                    <RestaurantSettingsPage />
                   </RequireAuth>
                 }
               />

@@ -1,11 +1,67 @@
-import type {
-  RestaurantRow,
-  MenuCategoryRow,
-  MenuItemRow,
-  TableRow,
-  OrderRow,
-  AuditLogRow,
-} from "@/convex/db";
+export interface RestaurantRow {
+  id: string;
+  name: string;
+  description: string | null;
+  address: string | null;
+  phone: string | null;
+  is_active: boolean;
+  created_at: string | number | Date;
+  logo_url?: string | null;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
+  landmark?: string | null;
+  momo_active?: boolean;
+  momo_number?: string | null;
+  momo_name?: string | null;
+  om_active?: boolean;
+  om_number?: string | null;
+  om_name?: string | null;
+  cash_active?: boolean;
+  payment_instructions?: string | null;
+}
+
+export interface MenuCategoryRow {
+  id: string;
+  name: string;
+  display_order: number;
+}
+
+export interface MenuItemRow {
+  id: string;
+  category_id: string | null;
+  name: string;
+  description: string | null;
+  price_fcfa: number | string;
+  is_available: boolean;
+  image_url?: string | null;
+}
+
+export interface TableRow {
+  id: string;
+  table_number: string;
+  qr_code_token: string;
+  capacity: number | string;
+  status: "free" | "occupied" | "reserved";
+}
+
+export interface OrderRow {
+  id: string;
+  order_number?: string | null;
+  order_type: "dine_in" | "delivery";
+  status: "pending" | "confirmed" | "in_kitchen" | "ready" | "served" | "delivered" | "cancelled";
+  total_fcfa: number | string;
+  payment_method: "cash" | "mobile_money";
+  payment_status: "pending" | "paid";
+  customer_name: string | null;
+  created_at: string | number | Date;
+}
+
+export interface AuditLogRow {
+  id: string;
+  action: string;
+  metadata: string | null;
+  created_at: string | number | Date;
+}
 
 /* ====================================================================== */
 /* ChopMboa — UI types for Neon-backed data + snake_case → camelCase      */
@@ -22,6 +78,18 @@ export interface UIRestaurant {
   phone: string | null;
   isActive: boolean;
   createdAt: number;
+  logoUrl?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  landmark?: string | null;
+  momoActive?: boolean;
+  momoNumber?: string | null;
+  momoName?: string | null;
+  omActive?: boolean;
+  omNumber?: string | null;
+  omName?: string | null;
+  cashActive?: boolean;
+  paymentInstructions?: string | null;
 }
 
 export interface UIMenuCategory {
@@ -37,6 +105,7 @@ export interface UIMenuItem {
   description: string | null;
   priceFcfa: number;
   isAvailable: boolean;
+  imageUrl?: string | null;
 }
 
 export interface UITable {
@@ -111,6 +180,18 @@ export function mapRestaurant(r: RestaurantRow): UIRestaurant {
     phone: r.phone,
     isActive: r.is_active,
     createdAt: new Date(r.created_at).getTime(),
+    logoUrl: r.logo_url || null,
+    latitude: r.latitude != null && !isNaN(Number(r.latitude)) ? Number(r.latitude) : null,
+    longitude: r.longitude != null && !isNaN(Number(r.longitude)) ? Number(r.longitude) : null,
+    landmark: r.landmark || null,
+    momoActive: r.momo_active ?? false,
+    momoNumber: r.momo_number || null,
+    momoName: r.momo_name || null,
+    omActive: r.om_active ?? false,
+    omNumber: r.om_number || null,
+    omName: r.om_name || null,
+    cashActive: r.cash_active ?? true,
+    paymentInstructions: r.payment_instructions || null,
   };
 }
 
@@ -126,6 +207,7 @@ export function mapItem(i: MenuItemRow): UIMenuItem {
     description: i.description,
     priceFcfa: Number(i.price_fcfa),
     isAvailable: i.is_available,
+    imageUrl: i.image_url || null,
   };
 }
 

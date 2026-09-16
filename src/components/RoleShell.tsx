@@ -61,7 +61,7 @@ export function RoleShell({
             aria-label="Se déconnecter"
             onClick={async () => {
               await signOut();
-              navigate("/");
+              navigate("/auth?mode=signin");
             }}
           >
             <LogOut className="size-4" />
@@ -91,7 +91,7 @@ export function NoWorkspace() {
         variant="outline"
         onClick={async () => {
           await signOut();
-          navigate("/");
+          navigate("/auth?mode=signin");
         }}
       >
         Se déconnecter

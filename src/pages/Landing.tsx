@@ -99,10 +99,10 @@ export default function Landing() {
           </nav>
           <div className="flex items-center gap-2">
             <Button asChild variant="ghost" className="hidden sm:inline-flex">
-              <a href="/auth?returnTo=%2Fdashboard">Se connecter</a>
+              <a href="/auth?mode=signin&returnTo=%2Fdashboard">Se connecter</a>
             </Button>
             <Button asChild>
-              <a href="/auth?returnTo=%2Fdashboard">
+              <a href="/auth?mode=signup&returnTo=%2Fdashboard">
                 Essai gratuit
                 <ArrowRight className="size-4" />
               </a>
