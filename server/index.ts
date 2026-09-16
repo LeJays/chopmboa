@@ -43,27 +43,38 @@ const pool = new Pool({
 });
 
 async function ensureSchema() {
-  try {
-    await pool.query(`ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS image_url TEXT`);
-    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS logo_url TEXT`);
-    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION`);
-    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION`);
-    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS landmark TEXT`);
-    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS momo_active BOOLEAN DEFAULT false`);
-    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS momo_number TEXT`);
-    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS momo_name TEXT`);
-    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS om_active BOOLEAN DEFAULT false`);
-    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS om_number TEXT`);
-    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS om_name TEXT`);
-    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS cash_active BOOLEAN DEFAULT true`);
-    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS payment_instructions TEXT`);
+  const alterations = [
+    `ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS image_url TEXT`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS logo_url TEXT`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS landmark TEXT`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS momo_active BOOLEAN DEFAULT false`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS momo_number TEXT`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS momo_name TEXT`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS om_active BOOLEAN DEFAULT false`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS om_number TEXT`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS om_name TEXT`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS cash_active BOOLEAN DEFAULT true`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS payment_instructions TEXT`,
     // Waiter assignment on orders
-    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS waiter_id UUID REFERENCES users(id)`);
-    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS waiter_name TEXT`);
-    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS waiter_avatar TEXT`);
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS waiter_id UUID`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS waiter_name TEXT`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS waiter_avatar TEXT`,
     // Avatar for staff / users
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT`);
-    // Push notification subscriptions
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT`,
+  ];
+
+  for (const sql of alterations) {
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      console.error(`Schema migration warning [${sql.slice(0, 60)}]:`, err);
+    }
+  }
+
+  // Push subscriptions table (separate try to not block the rest)
+  try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -75,10 +86,11 @@ async function ensureSchema() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
-    console.log("Database schema columns checked/added successfully.");
   } catch (err) {
-    console.error("Schema initialization warning:", err);
+    console.error("push_subscriptions table warning:", err);
   }
+
+  console.log("Database schema migration complete.");
 }
 void ensureSchema();
 
@@ -1288,15 +1300,23 @@ app.post("/api/actions/:actionRef", async (c) => {
     const body = await c.req.json<{ orderId?: string; status?: string }>();
     if (!body.orderId || !body.status) return c.json({ error: "Paramètres manquants" }, 400);
     const result = await pool.query(
-      `UPDATE orders SET status = $1::order_status, updated_at = NOW() WHERE id = $2::uuid RETURNING id, status, restaurant_id, waiter_id, customer_name, order_number`,
+      `UPDATE orders SET status = $1::order_status, updated_at = NOW()
+       WHERE id = $2::uuid
+       RETURNING id, status, restaurant_id, waiter_id, customer_name`,
       [body.status, body.orderId]
     );
     const order = result.rows[0];
     if (!order) return c.json({ error: "Commande introuvable" }, 404);
 
-    // Envoyer des notifications push si VAPID configuré
+    // Envoyer des notifications push si VAPID configuré (fire-and-forget)
     if (vapidPublicKey && vapidPrivateKey) {
-      void sendOrderStatusPush(order.id, order.status, order.restaurant_id, order.waiter_id, order.customer_name);
+      void sendOrderStatusPush(
+        order.id,
+        order.status,
+        order.restaurant_id,
+        order.waiter_id ?? null,
+        order.customer_name ?? null,
+      );
     }
 
     return c.json({ id: order.id, status: order.status });
