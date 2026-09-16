@@ -1680,6 +1680,7 @@ export default function Dashboard() {
               email: data.email,
               password: data.password,
               role: data.role as StaffRoleValue,
+              avatarUrl: data.avatarUrl ?? null,
             });
             toast.success(
               res.accountCreated
