@@ -147,6 +147,9 @@ export interface UIMember {
   role: string;
   fullName: string;
   email: string | null;
+  phone?: string | null;
+  avatarUrl?: string | null;
+  userId?: string;
   isOwner: boolean;
 }
 

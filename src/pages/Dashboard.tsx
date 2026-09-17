@@ -54,6 +54,8 @@ import {
   CreditCard,
   ShoppingBag,
   Star,
+  Mail,
+  Phone,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
@@ -94,8 +96,10 @@ import {
   CreateCategoryDialog,
   CreateOrderDialog,
   StaffDialog,
+  EditStaffDialog,
   STAFF_ROLES,
   type StaffDraft,
+  type EditStaffDraft,
 } from "@/components/dashboard/dialogs";
 import {
   KpiCard,
@@ -138,6 +142,7 @@ export default function Dashboard() {
   const [newCategoryOpen, setNewCategoryOpen] = useState(false);
   const [newOrderOpen, setNewOrderOpen] = useState(false);
   const [newStaffOpen, setNewStaffOpen] = useState(false);
+  const [editingStaff, setEditingStaff] = useState<UIMember | null>(null);
   const [qrTable, setQrTable] = useState<UITable | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [qrMenuUrl, setQrMenuUrl] = useState<string>("");
@@ -197,6 +202,9 @@ export default function Dashboard() {
       role: string;
       full_name: string;
       email: string | null;
+      phone?: string | null;
+      avatar_url?: string | null;
+      user_id?: string;
       is_owner: boolean;
     };
     return {
@@ -204,6 +212,9 @@ export default function Dashboard() {
       role: row.role,
       fullName: row.full_name,
       email: row.email,
+      phone: row.phone ?? null,
+      avatarUrl: row.avatar_url ?? null,
+      userId: row.user_id,
       isOwner: row.is_owner,
     };
   });
@@ -213,6 +224,7 @@ export default function Dashboard() {
   const createCategoryAction = useAction(api.menu.createCategory);
   const createOrderAction = useAction(api.orders.create);
   const createStaff = useAction(api.staff.createAndAssign);
+  const updateStaff = useAction(api.staff.update);
   const changeStaffRole = useAction(api.staff.changeRole);
   const removeStaff = useAction(api.staff.remove);
   const createItem = useAction(api.menu.createItem);
@@ -702,6 +714,7 @@ export default function Dashboard() {
             <TabsTrigger value="orders">Commandes</TabsTrigger>
             <TabsTrigger value="menu">Menu</TabsTrigger>
             <TabsTrigger value="tables">Tables & QR</TabsTrigger>
+            <TabsTrigger value="staff">👥 Équipe ({members.length})</TabsTrigger>
             <TabsTrigger value="caisse">💰 Caisse</TabsTrigger>
             <TabsTrigger value="cuisine">🍳 Cuisine</TabsTrigger>
             <TabsTrigger value="serveur">🏃‍♂️ Serveurs</TabsTrigger>
@@ -945,39 +958,78 @@ export default function Dashboard() {
                   {members.map((m) => (
                     <div
                       key={m.id}
-                      className="flex items-center justify-between rounded-lg border border-border/70 px-3 py-2.5"
+                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-border/70 bg-card p-3.5 hover:border-border transition-all shadow-xs"
                     >
-                      <div className="flex min-w-0 items-center gap-3">
-                        <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary-muted text-primary">
-                          {m.isOwner ? (
-                            <Store className="size-4" />
+                      <div className="flex min-w-0 items-center gap-3.5">
+                        <div className="relative size-12 shrink-0 overflow-hidden rounded-full border border-border/80 bg-muted flex items-center justify-center shadow-xs">
+                          {m.avatarUrl ? (
+                            <img
+                              src={m.avatarUrl}
+                              alt={m.fullName}
+                              className="size-full object-cover"
+                            />
                           ) : (
-                            <ChefHat className="size-4" />
+                            <div className="flex size-full items-center justify-center font-bold text-sm bg-primary/10 text-primary">
+                              {m.fullName
+                                ? m.fullName
+                                    .split(" ")
+                                    .filter(Boolean)
+                                    .slice(0, 2)
+                                    .map((n) => n[0])
+                                    .join("")
+                                    .toUpperCase()
+                                : (m.isOwner ? <Store className="size-5" /> : <ChefHat className="size-5" />)}
+                            </div>
                           )}
                         </div>
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">
-                            {m.fullName || "Membre de l'équipe"}
-                          </p>
-                          {m.email && (
-                            <p className="truncate text-xs text-muted-foreground">
-                              {m.email}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-foreground truncate">
+                              {m.fullName || "Membre de l'équipe"}
                             </p>
-                          )}
+                            <Badge
+                              variant={m.isOwner ? "default" : "secondary"}
+                              className="text-[11px] font-medium"
+                            >
+                              {m.isOwner ? "Propriétaire" : (ROLE_LABELS[m.role] ?? m.role)}
+                            </Badge>
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                            {m.email && (
+                              <span className="flex items-center gap-1.5 truncate">
+                                <Mail className="size-3 text-muted-foreground/70 shrink-0" />
+                                <span className="truncate">{m.email}</span>
+                              </span>
+                            )}
+                            <span className="flex items-center gap-1.5">
+                              <Phone className="size-3 text-muted-foreground/70 shrink-0" />
+                              {m.phone ? (
+                                <span>{m.phone}</span>
+                              ) : (
+                                <span className="italic text-muted-foreground/50">Non renseigné</span>
+                              )}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        <Badge variant={m.isOwner ? "default" : "secondary"}>
-                          {m.isOwner ? "Propriétaire" : ROLE_LABELS[m.role] ?? m.role}
-                        </Badge>
+                      <div className="flex shrink-0 items-center gap-2 self-end sm:self-center">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5 text-xs font-medium hover:border-primary hover:text-primary cursor-pointer"
+                          onClick={() => setEditingStaff(m)}
+                        >
+                          <Pencil className="size-3.5" />
+                          Modifier
+                        </Button>
                         {!m.isOwner && (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="size-8"
-                                aria-label="Gérer le membre"
+                                className="size-8 cursor-pointer text-muted-foreground hover:text-foreground"
+                                aria-label="Options du membre"
                               >
                                 <Settings className="size-4" />
                               </Button>
@@ -1323,6 +1375,142 @@ export default function Dashboard() {
                 hint="Chaque table génère un QR Code unique pour la commande client."
               />
             )}
+          </TabsContent>
+
+          <TabsContent value="staff" className="mt-6 space-y-4">
+            <Card className="border-border/70 shadow-none">
+              <CardHeader className="flex flex-row items-start justify-between space-y-0">
+                <div>
+                  <CardTitle className="text-base">
+                    L'équipe du restaurant
+                  </CardTitle>
+                  <CardDescription>
+                    Créez les comptes (email + mot de passe) et attribuez les
+                    rôles : gérant, caisse, cuisine, serveur, livreur.
+                  </CardDescription>
+                </div>
+                <Button size="sm" onClick={() => setNewStaffOpen(true)}>
+                  <Plus className="mr-1.5 size-4" />
+                  Ajouter un membre
+                </Button>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {members.map((m) => (
+                  <div
+                    key={m.id}
+                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-border/70 bg-card p-3.5 hover:border-border transition-all shadow-xs"
+                  >
+                    <div className="flex min-w-0 items-center gap-3.5">
+                      <div className="relative size-12 shrink-0 overflow-hidden rounded-full border border-border/80 bg-muted flex items-center justify-center shadow-xs">
+                        {m.avatarUrl ? (
+                          <img
+                            src={m.avatarUrl}
+                            alt={m.fullName}
+                            className="size-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex size-full items-center justify-center font-bold text-sm bg-primary/10 text-primary">
+                            {m.fullName
+                              ? m.fullName
+                                  .split(" ")
+                                  .filter(Boolean)
+                                  .slice(0, 2)
+                                  .map((n) => n[0])
+                                  .join("")
+                                  .toUpperCase()
+                              : (m.isOwner ? <Store className="size-5" /> : <ChefHat className="size-5" />)}
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-foreground truncate">
+                            {m.fullName || "Membre de l'équipe"}
+                          </p>
+                          <Badge
+                            variant={m.isOwner ? "default" : "secondary"}
+                            className="text-[11px] font-medium"
+                          >
+                            {m.isOwner ? "Propriétaire" : (ROLE_LABELS[m.role] ?? m.role)}
+                          </Badge>
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                          {m.email && (
+                            <span className="flex items-center gap-1.5 truncate">
+                              <Mail className="size-3 text-muted-foreground/70 shrink-0" />
+                              <span className="truncate">{m.email}</span>
+                            </span>
+                          )}
+                          <span className="flex items-center gap-1.5">
+                            <Phone className="size-3 text-muted-foreground/70 shrink-0" />
+                            {m.phone ? (
+                              <span>{m.phone}</span>
+                            ) : (
+                              <span className="italic text-muted-foreground/50">Non renseigné</span>
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2 self-end sm:self-center">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1.5 text-xs font-medium hover:border-primary hover:text-primary cursor-pointer"
+                        onClick={() => setEditingStaff(m)}
+                      >
+                        <Pencil className="size-3.5" />
+                        Modifier
+                      </Button>
+                      {!m.isOwner && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8 cursor-pointer text-muted-foreground hover:text-foreground"
+                              aria-label="Options du membre"
+                            >
+                              <Settings className="size-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuLabel>Changer le rôle</DropdownMenuLabel>
+                            {STAFF_ROLES.map((r) => (
+                              <DropdownMenuItem
+                                key={r.value}
+                                className="cursor-pointer"
+                                onClick={() => void handleStaffRole(m, r.value)}
+                              >
+                                <span className="mr-2 inline-flex size-4 items-center justify-center">
+                                  {m.role === r.value && (
+                                    <Check className="size-4 text-primary" />
+                                  )}
+                                </span>
+                                {r.label}
+                              </DropdownMenuItem>
+                            ))}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              className="cursor-pointer text-destructive focus:text-destructive"
+                              onClick={() => void handleStaffRemove(m)}
+                            >
+                              Retirer de l'équipe
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {members.length === 0 && (
+                  <EmptyState
+                    title="Aucun membre"
+                    hint="Ajoutez vos serveurs, caissiers et cuisiniers avec leurs comptes."
+                  />
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="abonnement" className="mt-6 space-y-6">
@@ -1678,6 +1866,7 @@ export default function Dashboard() {
               restaurantId: activeId!,
               fullName: data.fullName,
               email: data.email,
+              phone: data.phone ?? null,
               password: data.password,
               role: data.role as StaffRoleValue,
               avatarUrl: data.avatarUrl ?? null,
@@ -1694,6 +1883,37 @@ export default function Dashboard() {
           } catch (err) {
             const msg =
               err instanceof Error ? err.message : "Échec de la création.";
+            toast.error(msg);
+            return msg;
+          }
+        }}
+      />
+      <EditStaffDialog
+        open={!!editingStaff}
+        onOpenChange={(open) => {
+          if (!open) setEditingStaff(null);
+        }}
+        member={editingStaff}
+        onSave={async (data: EditStaffDraft) => {
+          try {
+            await updateStaff({
+              restaurantId: activeId!,
+              staffId: data.staffId,
+              fullName: data.fullName,
+              email: data.email,
+              phone: data.phone ?? null,
+              role: data.role,
+              avatarUrl: data.avatarUrl ?? null,
+              password: data.password,
+            });
+            toast.success(`${data.fullName} mis à jour avec succès.`);
+            setEditingStaff(null);
+            membersPoll.refresh();
+            auditPoll.refresh();
+            return null;
+          } catch (err) {
+            const msg =
+              err instanceof Error ? err.message : "Échec de la modification.";
             toast.error(msg);
             return msg;
           }

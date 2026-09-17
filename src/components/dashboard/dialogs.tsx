@@ -19,6 +19,7 @@ import {
 import { Loader2, Image as ImageIcon, Upload, X, Sparkles, Check, Trash2 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { fileToDataUrl, DISH_IMAGE_PRESETS } from "@/lib/imageUtils";
+import type { UIMember } from "@/lib/neonMappers";
 
 export const STAFF_ROLES = [
   { value: "manager", label: "Gérant" },
@@ -1131,6 +1132,7 @@ export interface StaffDraft {
   fullName: string;
   email: string;
   password: string;
+  phone?: string | null;
   role: string;
   avatarUrl?: string | null;
 }
@@ -1146,6 +1148,7 @@ export function StaffDialog({
 }) {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("waiter");
   const [avatarUrl, setAvatarUrl] = useState("");
@@ -1179,12 +1182,14 @@ export function StaffDialog({
       await onCreate({
         fullName,
         email,
+        phone: phone.trim() || null,
         password,
         role,
         avatarUrl: avatarUrl.trim() || null,
       });
       setFullName("");
       setEmail("");
+      setPhone("");
       setPassword("");
       setRole("waiter");
       setAvatarUrl("");
@@ -1195,7 +1200,7 @@ export function StaffDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Ajouter un membre à l'équipe</DialogTitle>
           <DialogDescription>
@@ -1221,7 +1226,7 @@ export function StaffDialog({
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold">Photo de profil</p>
-              <p className="text-xs text-muted-foreground">Optionnel — visible par les clients lors du suivi de commande.</p>
+              <p className="text-xs text-muted-foreground">Optionnel — visible sur le tableau de bord et le suivi.</p>
               {avatarUrl && (
                 <button
                   type="button"
@@ -1261,6 +1266,16 @@ export function StaffDialog({
             />
           </div>
           <div className="space-y-2">
+            <Label htmlFor="s-phone">Numéro de téléphone</Label>
+            <Input
+              id="s-phone"
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="Ex: +237 6XX XX XX XX"
+            />
+          </div>
+          <div className="space-y-2">
             <Label htmlFor="s-password">Mot de passe *</Label>
             <Input
               id="s-password"
@@ -1293,6 +1308,235 @@ export function StaffDialog({
           <Button onClick={submit} disabled={!canSubmit}>
             {pending && <Loader2 className="mr-2 size-4 animate-spin" />}
             Ajouter
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export interface EditStaffDraft {
+  staffId: string;
+  fullName: string;
+  email: string;
+  phone?: string | null;
+  role: string;
+  avatarUrl?: string | null;
+  password?: string;
+}
+
+export function EditStaffDialog({
+  open,
+  onOpenChange,
+  member,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  member: UIMember | null;
+  onSave: (data: EditStaffDraft) => Promise<string | null>;
+}) {
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("waiter");
+  const [avatarUrl, setAvatarUrl] = useState("");
+  const [isProcessingAvatar, setIsProcessingAvatar] = useState(false);
+  const [pending, setPending] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (member) {
+      setFullName(member.fullName || "");
+      setEmail(member.email || "");
+      setPhone(member.phone || "");
+      setPassword("");
+      setRole(member.role || "waiter");
+      setAvatarUrl(member.avatarUrl || "");
+    }
+  }, [member, open]);
+
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const canSubmit = fullName.trim().length >= 2 && emailOk && !pending;
+
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsProcessingAvatar(true);
+      const dataUrl = await fileToDataUrl(file, 256, 256);
+      setAvatarUrl(dataUrl);
+    } catch (err) {
+      console.error("Avatar read error:", err);
+    } finally {
+      setIsProcessingAvatar(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = "";
+    }
+  };
+
+  const submit = async () => {
+    if (!canSubmit || !member) return;
+    setPending(true);
+    try {
+      const err = await onSave({
+        staffId: member.id,
+        fullName: fullName.trim(),
+        email: email.trim(),
+        phone: phone.trim() || null,
+        role,
+        avatarUrl: avatarUrl.trim() || null,
+        password: password.trim() ? password.trim() : undefined,
+      });
+      if (!err) {
+        onOpenChange(false);
+      }
+    } finally {
+      setPending(false);
+    }
+  };
+
+  if (!member) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Modifier le membre du personnel</DialogTitle>
+          <DialogDescription>
+            Modifiez la photo, les coordonnées, le rôle ou réinitialisez le mot de passe.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 pt-1">
+          {/* Photo de profil */}
+          <div className="flex items-center gap-4 rounded-xl border border-border/70 bg-muted/20 p-3">
+            <div
+              onClick={() => avatarInputRef.current?.click()}
+              className="relative size-16 rounded-full border-2 border-dashed border-border hover:border-primary cursor-pointer overflow-hidden bg-muted flex items-center justify-center transition-colors shrink-0 shadow-xs"
+            >
+              {avatarUrl ? (
+                <img src={avatarUrl} alt="Avatar" className="size-full object-cover" />
+              ) : isProcessingAvatar ? (
+                <Loader2 className="size-5 animate-spin text-muted-foreground" />
+              ) : (
+                <Upload className="size-5 text-muted-foreground" />
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold">Photo de profil</p>
+              <p className="text-xs text-muted-foreground">Cliquez pour téléverser une photo.</p>
+              <div className="flex items-center gap-2 mt-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2"
+                  onClick={() => avatarInputRef.current?.click()}
+                >
+                  Changer
+                </Button>
+                {avatarUrl && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs px-2 text-destructive hover:text-destructive"
+                    onClick={() => setAvatarUrl("")}
+                  >
+                    Supprimer
+                  </Button>
+                )}
+              </div>
+            </div>
+            <input
+              ref={avatarInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleAvatarChange}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="edit-name">Nom complet *</Label>
+            <Input
+              id="edit-name"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Ex: Amina Nkoulou"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="edit-email">Email *</Label>
+            <Input
+              id="edit-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="amina@exemple.cm"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="edit-phone">Téléphone</Label>
+            <Input
+              id="edit-phone"
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="Ex: +237 6XX XX XX XX"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="edit-role">Rôle</Label>
+            {member.isOwner ? (
+              <div className="rounded-md border border-border/70 bg-muted/40 px-3 py-2 text-sm font-medium text-foreground flex items-center justify-between">
+                <span>Propriétaire</span>
+                <span className="text-xs text-muted-foreground">(Non modifiable)</span>
+              </div>
+            ) : (
+              <Select value={role} onValueChange={setRole}>
+                <SelectTrigger id="edit-role" className="w-full">
+                  <SelectValue placeholder="Choisir un rôle" />
+                </SelectTrigger>
+                <SelectContent>
+                  {STAFF_ROLES.map((r) => (
+                    <SelectItem key={r.value} value={r.value}>
+                      {r.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="edit-password">Nouveau mot de passe</Label>
+              <span className="text-[11px] text-muted-foreground">Optionnel</span>
+            </div>
+            <Input
+              id="edit-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Laisser vide pour ne pas modifier"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Renseignez ce champ uniquement si vous souhaitez réinitialiser son mot de passe de connexion.
+            </p>
+          </div>
+        </div>
+
+        <DialogFooter className="pt-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Annuler
+          </Button>
+          <Button onClick={submit} disabled={!canSubmit}>
+            {pending && <Loader2 className="mr-2 size-4 animate-spin" />}
+            Enregistrer les modifications
           </Button>
         </DialogFooter>
       </DialogContent>

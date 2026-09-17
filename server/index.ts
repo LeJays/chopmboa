@@ -63,6 +63,7 @@ async function ensureSchema() {
     `ALTER TABLE orders ADD COLUMN IF NOT EXISTS waiter_avatar TEXT`,
     // Avatar for staff / users
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT`,
   ];
 
   for (const sql of alterations) {
@@ -791,7 +792,9 @@ app.post("/api/actions/:actionRef", async (c) => {
          'owner' as role,
          u.full_name,
          u.email,
+         u.phone,
          u.avatar_url,
+         u.id::text as user_id,
          true as is_owner
        FROM restaurants r
        JOIN users u ON r.owner_id = u.id
@@ -802,7 +805,9 @@ app.post("/api/actions/:actionRef", async (c) => {
          rs.role::text as role,
          u.full_name,
          u.email,
+         u.phone,
          u.avatar_url,
+         u.id::text as user_id,
          false as is_owner
        FROM restaurant_staff rs
        JOIN users u ON rs.user_id = u.id
@@ -1599,6 +1604,7 @@ app.post("/api/actions/:actionRef", async (c) => {
       fullName?: string;
       email?: string;
       password?: string;
+      phone?: string | null;
       role?: string;
       avatarUrl?: string | null;
     }>();
@@ -1611,6 +1617,7 @@ app.post("/api/actions/:actionRef", async (c) => {
     const cleanName = body.fullName.trim();
     const cleanRole = body.role || "waiter";
     const cleanAvatar = body.avatarUrl?.trim() || null;
+    const cleanPhone = body.phone?.trim() || null;
 
     let userId: string;
     let accountCreated = false;
@@ -1623,21 +1630,22 @@ app.post("/api/actions/:actionRef", async (c) => {
     if (existingUser.rows.length > 0) {
       userId = existingUser.rows[0].id;
       accountCreated = false;
-      // Update avatar if provided
-      if (cleanAvatar !== undefined) {
-        await pool.query(
-          `UPDATE users SET avatar_url = $1 WHERE id = $2::uuid`,
-          [cleanAvatar, userId]
-        );
-      }
+      // Update avatar and phone if provided
+      await pool.query(
+        `UPDATE users
+         SET avatar_url = COALESCE($1, avatar_url),
+             phone = COALESCE($2, phone)
+         WHERE id = $3::uuid`,
+        [cleanAvatar, cleanPhone, userId]
+      );
     } else {
       const passwordToHash = body.password?.trim() || "ChopMboa2026!";
       const passwordHash = await hashPassword(passwordToHash);
       const newUser = await pool.query(
-        `INSERT INTO users (full_name, email, password_hash, global_role, avatar_url)
-         VALUES ($1, $2, $3, 'customer'::global_role, $4)
+        `INSERT INTO users (full_name, email, password_hash, global_role, avatar_url, phone)
+         VALUES ($1, $2, $3, 'customer'::global_role, $4, $5)
          RETURNING id`,
-        [cleanName, cleanEmail, passwordHash, cleanAvatar]
+        [cleanName, cleanEmail, passwordHash, cleanAvatar, cleanPhone]
       );
       userId = newUser.rows[0].id;
       accountCreated = true;
@@ -1678,7 +1686,7 @@ app.post("/api/actions/:actionRef", async (c) => {
         [
           body.restaurantId,
           payload.sub,
-          JSON.stringify({ fullName: cleanName, email: cleanEmail, role: cleanRole, accountCreated }),
+          JSON.stringify({ fullName: cleanName, email: cleanEmail, phone: cleanPhone, role: cleanRole, accountCreated }),
         ]
       );
     }
@@ -1712,6 +1720,114 @@ app.post("/api/actions/:actionRef", async (c) => {
     }
 
     return c.json(result.rows[0] || {});
+  }
+
+  if (actionRef === "staff.update") {
+    const payload = verifyToken(getCookie(c, "chopmboa_session"));
+    if (!payload) return c.json({ error: "Non autorisé" }, 401);
+
+    const body = await c.req.json<{
+      restaurantId?: string;
+      staffId?: string;
+      fullName?: string;
+      email?: string;
+      phone?: string | null;
+      role?: string;
+      avatarUrl?: string | null;
+      password?: string;
+    }>();
+
+    if (!body.restaurantId || !body.staffId || !body.fullName?.trim() || !body.email?.trim()) {
+      return c.json({ error: "Restaurant, identifiant, nom et email requis" }, 400);
+    }
+
+    const cleanName = body.fullName.trim();
+    const cleanEmail = body.email.trim().toLowerCase();
+    const cleanPhone = body.phone !== undefined ? (body.phone ? body.phone.trim() : null) : null;
+    const cleanAvatar = body.avatarUrl !== undefined ? (body.avatarUrl ? body.avatarUrl.trim() : null) : null;
+    const isOwnerMember = body.staffId.startsWith("owner-");
+
+    let targetUserId: string;
+
+    if (isOwnerMember) {
+      targetUserId = body.staffId.replace("owner-", "");
+      const rest = await pool.query(
+        `SELECT owner_id FROM restaurants WHERE id = $1::uuid LIMIT 1`,
+        [body.restaurantId]
+      );
+      if (rest.rows.length === 0 || rest.rows[0].owner_id !== targetUserId) {
+        return c.json({ error: "Propriétaire invalide pour ce restaurant" }, 403);
+      }
+    } else {
+      const staffRes = await pool.query(
+        `SELECT user_id, role FROM restaurant_staff WHERE id = $1::uuid AND restaurant_id = $2::uuid AND deleted_at IS NULL LIMIT 1`,
+        [body.staffId, body.restaurantId]
+      );
+      if (staffRes.rows.length === 0) {
+        return c.json({ error: "Membre introuvable" }, 404);
+      }
+      targetUserId = staffRes.rows[0].user_id;
+    }
+
+    // Check email conflict
+    const emailConflict = await pool.query(
+      `SELECT id FROM users WHERE email = $1 AND id != $2::uuid LIMIT 1`,
+      [cleanEmail, targetUserId]
+    );
+    if (emailConflict.rows.length > 0) {
+      return c.json({ error: "Cet email est déjà associé à un autre compte." }, 409);
+    }
+
+    // Update user info
+    await pool.query(
+      `UPDATE users
+       SET full_name = $1, email = $2, phone = $3, avatar_url = $4
+       WHERE id = $5::uuid`,
+      [cleanName, cleanEmail, cleanPhone, cleanAvatar, targetUserId]
+    );
+
+    // Update password if provided
+    if (body.password && body.password.trim().length >= 6) {
+      const passwordHash = await hashPassword(body.password.trim());
+      await pool.query(
+        `UPDATE users SET password_hash = $1 WHERE id = $2::uuid`,
+        [passwordHash, targetUserId]
+      );
+    }
+
+    // Update staff role if not owner
+    let newRole = isOwnerMember ? "owner" : null;
+    if (!isOwnerMember && body.role) {
+      const validRoles = ["manager", "waiter", "kitchen", "cashier", "delivery"];
+      if (validRoles.includes(body.role)) {
+        await pool.query(
+          `UPDATE restaurant_staff SET role = $1::staff_role WHERE id = $2::uuid`,
+          [body.role, body.staffId]
+        );
+        newRole = body.role;
+      }
+    }
+
+    // Audit log
+    await pool.query(
+      `INSERT INTO audit_logs (restaurant_id, user_id, action, target_entity, metadata)
+       VALUES ($1::uuid, $2::uuid, 'UPDATE_STAFF', 'restaurant_staff', $3)`,
+      [
+        body.restaurantId,
+        payload.sub,
+        JSON.stringify({
+          staffId: body.staffId,
+          targetUserId,
+          fullName: cleanName,
+          email: cleanEmail,
+          phone: cleanPhone,
+          role: newRole,
+          passwordUpdated: !!(body.password && body.password.trim().length >= 6),
+        }),
+      ]
+    );
+
+    return c.json({ ok: true, staffId: body.staffId });
   }
 
   if (actionRef === "staff.remove") {
