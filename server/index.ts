@@ -64,6 +64,8 @@ async function ensureSchema() {
     // Avatar for staff / users
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT`,
+    // Delivery address on orders
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_address TEXT`,
   ];
 
   for (const sql of alterations) {
@@ -72,6 +74,21 @@ async function ensureSchema() {
     } catch (err) {
       console.error(`Schema migration warning [${sql.slice(0, 60)}]:`, err);
     }
+  }
+
+  // Driver locations table for real-time GPS tracking
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS driver_locations (
+        user_id UUID PRIMARY KEY REFERENCES users(id),
+        restaurant_id UUID NOT NULL REFERENCES restaurants(id),
+        lat DOUBLE PRECISION NOT NULL,
+        lng DOUBLE PRECISION NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+  } catch (err) {
+    console.error("driver_locations table warning:", err);
   }
 
   // Push subscriptions table (separate try to not block the rest)
@@ -1945,6 +1962,81 @@ app.post("/api/actions/:actionRef", async (c) => {
     return c.json({ ok: true });
   }
 
+  // ── Delivery: livreur envoie sa position GPS ─────────────────────────────
+  if (actionRef === "delivery.updateLocation") {
+    if (!payload) return c.json({ error: "Unauthorized" }, 401);
+    const body = await c.req.json<{ restaurantId: string; lat: number; lng: number }>();
+    if (!body.restaurantId || body.lat == null || body.lng == null) {
+      return c.json({ error: "restaurantId, lat, lng requis" }, 400);
+    }
+    await pool.query(
+      `INSERT INTO driver_locations (user_id, restaurant_id, lat, lng, updated_at)
+       VALUES ($1::uuid, $2::uuid, $3, $4, NOW())
+       ON CONFLICT (user_id) DO UPDATE
+         SET restaurant_id = EXCLUDED.restaurant_id,
+             lat = EXCLUDED.lat,
+             lng = EXCLUDED.lng,
+             updated_at = NOW()`,
+      [payload.sub, body.restaurantId, body.lat, body.lng]
+    );
+    return c.json({ ok: true });
+  }
+
+  // ── Delivery: propriétaire voit tous les livreurs + leurs courses ─────────
+  if (actionRef === "delivery.listDriverLocations") {
+    if (!payload) return c.json({ error: "Unauthorized" }, 401);
+    const body = await c.req.json<{ restaurantId: string }>();
+    if (!body.restaurantId) return c.json([]);
+
+    // Positions des livreurs actifs (mis à jour il y a moins de 5 min)
+    const locRes = await pool.query(
+      `SELECT
+         dl.user_id::text,
+         u.full_name,
+         u.avatar_url,
+         dl.lat,
+         dl.lng,
+         dl.updated_at
+       FROM driver_locations dl
+       JOIN users u ON u.id = dl.user_id
+       WHERE dl.restaurant_id = $1::uuid
+         AND dl.updated_at > NOW() - INTERVAL '5 minutes'`,
+      [body.restaurantId]
+    );
+
+    // Pour chaque livreur, on récupère ses commandes actives
+    const result = await Promise.all(
+      locRes.rows.map(async (driver) => {
+        const ordRes = await pool.query(
+          `SELECT id::text, order_number, status, customer_name, delivery_address, total_fcfa
+           FROM orders
+           WHERE restaurant_id = $1::uuid
+             AND order_type = 'delivery'
+             AND status IN ('ready', 'out_for_delivery')
+             AND waiter_id = $2::uuid`,
+          [body.restaurantId, driver.user_id]
+        );
+        return {
+          userId: driver.user_id,
+          fullName: driver.full_name,
+          avatarUrl: driver.avatar_url,
+          lat: Number(driver.lat),
+          lng: Number(driver.lng),
+          updatedAt: driver.updated_at,
+          activeOrders: ordRes.rows.map((o) => ({
+            id: o.id,
+            orderNumber: o.order_number,
+            status: o.status,
+            customerName: o.customer_name,
+            deliveryAddress: o.delivery_address,
+            totalFcfa: Number(o.total_fcfa),
+          })),
+        };
+      })
+    );
+    return c.json(result);
+  }
+
   // Determine if it should return array or object based on action name
   if (actionRef.startsWith("get") || actionRef.startsWith("list") || actionRef.includes("List")) {
     if (actionRef.endsWith("s") || actionRef.includes("All")) {
@@ -1966,7 +2058,8 @@ if (process.env.NODE_ENV !== "netlify") {
   app.use("/*", serveStatic({ root: "./dist" }));
   app.get("*", serveStatic({ path: "./dist/index.html" }));
 
-  serve({ fetch: app.fetch, port: 3000, hostname: "0.0.0.0" }, (info) => {
+  const serverPort = Number(process.env.PORT ?? 3000);
+  serve({ fetch: app.fetch, port: serverPort, hostname: "0.0.0.0" }, (info) => {
     console.log(`Neon API running on http://localhost:${info.port}`);
   });
 }

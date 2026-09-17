@@ -38,7 +38,7 @@ import {
   Calculator,
   Check,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
 
 /* ====================================================================== */
@@ -1444,7 +1444,10 @@ export function DeliveriesView({
     10_000,
   );
   const setStatus = useAction(api.orders.setStatus);
+  const updateLocation = useAction(api.delivery.updateLocation);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [gpsStatus, setGpsStatus] = useState<"idle" | "active" | "denied">("idle");
+  const watchIdRef = useRef<number | null>(null);
 
   const orders = useMemo(
     () => (ordersPoll.data ?? []).filter((o) => o.order_type === "delivery"),
@@ -1452,6 +1455,47 @@ export function DeliveriesView({
   );
   const toPick = orders.filter((o) => o.status === "ready");
   const enRoute = orders.filter((o) => o.status === "out_for_delivery");
+
+  // ── Partage GPS automatique ──────────────────────────────────────────────
+  const sendLocation = useCallback(
+    (pos: GeolocationPosition) => {
+      void updateLocation({
+        restaurantId,
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+      }).catch(() => { /* silencieux */ });
+    },
+    [restaurantId, updateLocation],
+  );
+
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setGpsStatus("denied");
+      return;
+    }
+    // Envoi initial immédiat
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setGpsStatus("active");
+        sendLocation(pos);
+      },
+      () => setGpsStatus("denied"),
+    );
+    // Suivi continu (toutes les 30 s)
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        setGpsStatus("active");
+        sendLocation(pos);
+      },
+      () => setGpsStatus("denied"),
+      { maximumAge: 30_000, timeout: 10_000, enableHighAccuracy: false },
+    );
+    return () => {
+      if (watchIdRef.current != null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      }
+    };
+  }, [sendLocation]);
 
   const move = async (o: ActiveOrder, status: "out_for_delivery" | "delivered") => {
     setPendingId(o.id);
@@ -1468,10 +1512,31 @@ export function DeliveriesView({
 
   const inner = (
     <div className="space-y-6">
+      {/* Bandeau GPS */}
+      <div
+        className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium ${
+          gpsStatus === "active"
+            ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400"
+            : gpsStatus === "denied"
+              ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-400"
+              : "bg-muted text-muted-foreground"
+        }`}
+      >
+        <span className="text-base">
+          {gpsStatus === "active" ? "📡" : gpsStatus === "denied" ? "❌" : "⏳"}
+        </span>
+        {gpsStatus === "active" && "Position partagée avec le restaurant"}
+        {gpsStatus === "denied" && "GPS refusé — activez la localisation pour être visible"}
+        {gpsStatus === "idle" && "Demande de localisation en cours…"}
+      </div>
+
+      {/* Section À récupérer */}
       <section>
-        <h2 className="mb-3 flex items-center gap-2 px-1 text-sm font-bold uppercase tracking-wide">
-          <Utensils className="size-4 text-primary" /> À récupérer au restaurant
-          <Badge variant="secondary">{toPick.length}</Badge>
+        <h2 className="mb-3 flex items-center gap-2 px-1 text-sm font-bold uppercase tracking-wide text-orange-600 dark:text-orange-400">
+          <Utensils className="size-4" /> À récupérer au restaurant
+          <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+            {toPick.length}
+          </Badge>
         </h2>
         <div className="grid gap-3 md:grid-cols-2">
           {toPick.map((o) => (
@@ -1481,17 +1546,24 @@ export function DeliveriesView({
               pending={pendingId === o.id}
               action={{ label: "Récupérer et partir en livraison", to: "out_for_delivery" as const }}
               onAction={move}
+              variant="pickup"
             />
           ))}
           {toPick.length === 0 && (
-            <p className="text-sm text-muted-foreground">Rien à récupérer.</p>
+            <p className="col-span-2 rounded-lg bg-muted px-4 py-3 text-sm text-muted-foreground">
+              ✅ Rien à récupérer pour l'instant.
+            </p>
           )}
         </div>
       </section>
+
+      {/* Section En route */}
       <section>
-        <h2 className="mb-3 flex items-center gap-2 px-1 text-sm font-bold uppercase tracking-wide">
-          <Bike className="size-4 text-primary" /> En route
-          <Badge variant="secondary">{enRoute.length}</Badge>
+        <h2 className="mb-3 flex items-center gap-2 px-1 text-sm font-bold uppercase tracking-wide text-blue-600 dark:text-blue-400">
+          <Bike className="size-4" /> En route
+          <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+            {enRoute.length}
+          </Badge>
         </h2>
         <div className="grid gap-3 md:grid-cols-2">
           {enRoute.map((o) => (
@@ -1499,12 +1571,15 @@ export function DeliveriesView({
               key={o.id}
               o={o}
               pending={pendingId === o.id}
-              action={{ label: "Marquer livrée", to: "delivered" as const }}
+              action={{ label: "✅ Marquer comme livrée", to: "delivered" as const }}
               onAction={move}
+              variant="enroute"
             />
           ))}
           {enRoute.length === 0 && (
-            <p className="text-sm text-muted-foreground">Aucune course en cours.</p>
+            <p className="col-span-2 rounded-lg bg-muted px-4 py-3 text-sm text-muted-foreground">
+              🏍️ Aucune course en cours pour l'instant.
+            </p>
           )}
         </div>
       </section>
@@ -1525,29 +1600,52 @@ function DeliveryCard({
   pending,
   action,
   onAction,
+  variant,
 }: {
   o: ActiveOrder;
   pending: boolean;
   action: { label: string; to: "out_for_delivery" | "delivered" };
   onAction: (o: ActiveOrder, to: "out_for_delivery" | "delivered") => Promise<void>;
+  variant: "pickup" | "enroute";
 }) {
+  const borderColor = variant === "pickup" ? "border-orange-200 dark:border-orange-800" : "border-blue-200 dark:border-blue-800";
+  const headerBg = variant === "pickup" ? "bg-orange-50 dark:bg-orange-950/30" : "bg-blue-50 dark:bg-blue-950/30";
+  const btnClass = variant === "pickup"
+    ? "bg-orange-500 hover:bg-orange-600 text-white"
+    : "bg-blue-500 hover:bg-blue-600 text-white";
+
   return (
-    <Card className="border-border/70 shadow-none">
-      <CardContent className="space-y-2 pt-4">
-        <div className="flex items-center justify-between">
-          <p className="font-bold">{o.order_number}</p>
-          <span className="text-sm font-extrabold text-primary">
-            {formatFcfa(o.total_fcfa)}
-          </span>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Client : {o.customer_name ?? "—"}
-        </p>
+    <Card className={`overflow-hidden shadow-none ${borderColor}`}>
+      {/* Header coloré */}
+      <div className={`flex items-center justify-between px-4 py-2.5 ${headerBg}`}>
+        <span className="font-bold tracking-wide">{o.order_number}</span>
+        <span className="text-sm font-extrabold">
+          {formatFcfa(o.total_fcfa)}
+        </span>
+      </div>
+      <CardContent className="space-y-2 pt-3 pb-4">
+        {o.customer_name && (
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            👤 <span className="font-medium text-foreground">{o.customer_name}</span>
+          </p>
+        )}
         {o.delivery_address && (
-          <p className="text-sm">📍 {o.delivery_address}</p>
+          <p className="flex items-start gap-1.5 text-sm">
+            📍 <span>{o.delivery_address}</span>
+          </p>
+        )}
+        {o.items && o.items.length > 0 && (
+          <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground space-y-0.5">
+            {o.items.map((item) => (
+              <div key={item.id} className="flex justify-between">
+                <span>× {item.quantity} {item.item_name}</span>
+                <span>{formatFcfa(item.price_fcfa * item.quantity)}</span>
+              </div>
+            ))}
+          </div>
         )}
         <Button
-          className="w-full"
+          className={`mt-1 w-full ${btnClass}`}
           size="sm"
           disabled={pending}
           onClick={() => void onAction(o, action.to)}
@@ -1559,6 +1657,7 @@ function DeliveryCard({
     </Card>
   );
 }
+
 
 function StatusPill({ status }: { status: string }) {
   const labels: Record<string, string> = {

@@ -108,6 +108,7 @@ import {
   StatusBadge,
 } from "@/components/dashboard/widgets";
 import { KitchenView, PosView, WaiterView, DeliveriesView } from "./RoleWorkspaces";
+import { DriverMap, type DriverLocation } from "@/components/delivery/DriverMap";
 
 const ROLE_LABELS: Record<string, string> = {
   manager: "Gérant",
@@ -183,6 +184,11 @@ export default function Dashboard() {
   const auditPoll = usePollAction<unknown[]>(
     api.audit.listByRestaurant,
     selectedId ? { restaurantId: selectedId } : null,
+  );
+  const driverLocationsPoll = usePollAction<DriverLocation[]>(
+    api.delivery.listDriverLocations,
+    selectedId ? { restaurantId: selectedId } : null,
+    15_000,
   );
 
   const restaurants: UIRestaurant[] = (restaurantsPoll.data ?? []).map((r) =>
@@ -1723,34 +1729,167 @@ export default function Dashboard() {
           </TabsContent>
 
           <TabsContent value="livraison" className="mt-6 space-y-4">
-            <Card className="border-border/70 shadow-none">
-              <CardHeader>
-                <CardTitle>Livreurs & Courses</CardTitle>
-                <CardDescription>
-                  Gérez l'expédition des livraisons, le départ en course et la finalisation des livraisons à domicile.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {activeId ? (
-                  <DeliveriesView
-                    restaurantId={activeId}
-                    context={staffContext || {
-                      userId: user?.id || "",
-                      fullName: user?.email || "Propriétaire",
-                      email: user?.email || null,
-                      role: "owner",
-                      restaurants: (restaurants || []).map(r => ({ id: r.id, name: r.name, isOwner: true })),
-                      primaryRestaurantId: activeId,
-                      primaryRestaurantName: restaurants?.find(r => r.id === activeId)?.name || null
-                    }}
-                    embedded
-                  />
-                ) : (
+            {activeId ? (() => {
+              const drivers: DriverLocation[] = driverLocationsPoll.data ?? [];
+              const activeRestaurant = restaurants.find(r => r.id === activeId);
+              const mapCenter: [number, number] = activeRestaurant?.latitude && activeRestaurant?.longitude
+                ? [activeRestaurant.latitude, activeRestaurant.longitude]
+                : [3.848, 11.502];
+
+              return (
+                <>
+                  {/* Carte OSM */}
+                  <Card className="border-border/70 shadow-none overflow-hidden">
+                    <CardHeader className="pb-3">
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="flex items-center gap-2 text-base">
+                          🗺️ Carte des livreurs en temps réel
+                          <Badge variant="secondary">{drivers.length} actif{drivers.length > 1 ? "s" : ""}</Badge>
+                        </CardTitle>
+                        <span className="text-xs text-muted-foreground">
+                          Actualisation auto toutes les 15 s
+                        </span>
+                      </div>
+                      <CardDescription>
+                        Les livreurs apparaissent sur la carte lorsqu'ils partagent leur position GPS depuis l'application.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="px-4 pb-4">
+                      <DriverMap
+                        drivers={drivers}
+                        center={mapCenter}
+                        height={420}
+                      />
+                      {drivers.length === 0 && (
+                        <p className="mt-3 text-center text-sm text-muted-foreground">
+                          Aucun livreur actif pour l'instant. Les livreurs apparaissent ici dès qu'ils partagent leur position.
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* Liste des livreurs actifs */}
+                  {drivers.length > 0 && (
+                    <Card className="border-border/70 shadow-none">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base">🏍️ Livreurs actifs</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-3">
+                          {drivers.map((driver) => {
+                            const mins = Math.floor(
+                              (Date.now() - new Date(driver.updatedAt).getTime()) / 60_000,
+                            );
+                            return (
+                              <div
+                                key={driver.userId}
+                                className="flex items-start gap-3 rounded-lg border border-border/60 p-3"
+                              >
+                                {/* Avatar */}
+                                <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-orange-100 text-sm font-bold text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+                                  {driver.avatarUrl ? (
+                                    <img
+                                      src={driver.avatarUrl}
+                                      alt={driver.fullName}
+                                      className="size-10 rounded-full object-cover"
+                                    />
+                                  ) : (
+                                    driver.fullName
+                                      .split(" ")
+                                      .map((w) => w[0])
+                                      .join("")
+                                      .toUpperCase()
+                                      .slice(0, 2)
+                                  )}
+                                </div>
+                                {/* Infos */}
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <p className="font-semibold">{driver.fullName}</p>
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400">
+                                      📡 En ligne
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">
+                                      il y a {mins < 1 ? "moins d'1 min" : `${mins} min`}
+                                    </span>
+                                  </div>
+                                  {/* Courses actives */}
+                                  {driver.activeOrders.length === 0 ? (
+                                    <p className="mt-1 text-sm text-muted-foreground">Aucune course en cours</p>
+                                  ) : (
+                                    <div className="mt-2 space-y-1.5">
+                                      {driver.activeOrders.map((o) => (
+                                        <div
+                                          key={o.id}
+                                          className="rounded-md bg-muted/60 px-3 py-2 text-sm"
+                                        >
+                                          <div className="flex items-center justify-between">
+                                            <span className="font-medium">{o.orderNumber}</span>
+                                            <span className="font-bold text-primary">
+                                              {o.totalFcfa.toLocaleString("fr-FR")} FCFA
+                                            </span>
+                                          </div>
+                                          {o.customerName && (
+                                            <p className="text-xs text-muted-foreground">👤 {o.customerName}</p>
+                                          )}
+                                          {o.deliveryAddress && (
+                                            <p className="text-xs text-muted-foreground">📍 {o.deliveryAddress}</p>
+                                          )}
+                                          <span className={`mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                            o.status === "out_for_delivery"
+                                              ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+                                              : "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300"
+                                          }`}>
+                                            {o.status === "out_for_delivery" ? "🚀 En livraison" : "⏳ À récupérer"}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Vue commandes livraison (identique à la vue livreur) */}
+                  <Card className="border-border/70 shadow-none">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">📋 Toutes les courses en cours</CardTitle>
+                      <CardDescription>
+                        Vue d'ensemble des commandes de livraison actives.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <DeliveriesView
+                        restaurantId={activeId}
+                        context={staffContext || {
+                          userId: user?.id || "",
+                          fullName: user?.email || "Propriétaire",
+                          email: user?.email || null,
+                          role: "owner",
+                          restaurants: (restaurants || []).map(r => ({ id: r.id, name: r.name, isOwner: true })),
+                          primaryRestaurantId: activeId,
+                          primaryRestaurantName: restaurants?.find(r => r.id === activeId)?.name || null
+                        }}
+                        embedded
+                      />
+                    </CardContent>
+                  </Card>
+                </>
+              );
+            })() : (
+              <Card className="border-border/70 shadow-none">
+                <CardContent className="py-12">
                   <EmptyState title="Aucun restaurant sélectionné" hint="Veuillez sélectionner ou créer un restaurant pour accéder aux livraisons." />
-                )}
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
+
         </Tabs>
       </div>
 
